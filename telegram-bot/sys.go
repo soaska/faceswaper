@@ -47,10 +47,12 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 }
 
 func downloadTelegramFile(bot *tgbotapi.BotAPI, fileID, destinationPath string) error {
-	fileURL, err := bot.GetFileDirectURL(fileID)
+	file, err := bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
 	if err != nil {
 		return fmt.Errorf("не удалось получить файл по ID: %v", err)
 	}
+
+	fileURL := fmt.Sprintf("%s/file/bot%s/%s", api_endpint, bot.Token, file.FilePath)
 
 	// Download request
 	resp, err := http.Get(fileURL)
