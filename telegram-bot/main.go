@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -25,12 +24,14 @@ var authToken string
 // getiing JWT for pocketbase
 func authenticatePocketBase() error {
 	authData := map[string]string{
-		"identity": email,
-		"password": password,
+		"identity": email,    // Email администратора/пользователя
+		"password": password, // Пароль администратора/пользователя
 	}
 
 	authDataJson, _ := json.Marshal(authData)
-	authURL := fmt.Sprintf("%s/api/admins/auth-with-password", pocketBaseUrl)
+
+	// Используем правильный URL для аутентификации
+	authURL := fmt.Sprintf("%s/api/admins/auth-with-password", pocketBaseUrl) // Используем для администратора
 
 	resp, err := http.Post(authURL, "application/json", bytes.NewBuffer(authDataJson))
 	if err != nil {
@@ -38,23 +39,27 @@ func authenticatePocketBase() error {
 	}
 	defer resp.Body.Close()
 
+	// Обрабатываем статус ошибки на уровне HTTP
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("авторизация не удалась, код %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("авторизация не удалась, код %d, ответ: %s", resp.StatusCode, string(body))
 	}
 
-	// Getting jwt
-	body, _ := ioutil.ReadAll(resp.Body)
+	// Обрабатываем тело ответа и извлекаем JWT токен
+	body, _ := io.ReadAll(resp.Body)
 	var authResponse map[string]interface{}
-	json.Unmarshal(body, &authResponse)
-
-	token, ok := authResponse["token"].(string)
-	if !ok {
-		return fmt.Errorf("не удалось получить токен из ответа: %s", body)
+	if err := json.Unmarshal(body, &authResponse); err != nil {
+		return fmt.Errorf("ошибка разбора ответа: %v, ответ: %s", err, string(body))
 	}
 
-	// global jwt
-	authToken = token
+	// Извлекаем поле "token" с более надежной проверкой
+	token, ok := authResponse["token"].(string)
+	if !ok || token == "" {
+		return fmt.Errorf("не удалось получить токен из ответа: %s", string(body))
+	}
 
+	// Сохраняем токен в глобальную переменную
+	authToken = token
 	log.Println("PocketBase: Авторизация прошла успешно. Получен токен от PocketBase.")
 	return nil
 }
@@ -79,7 +84,7 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -90,26 +95,31 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 // Функция для регистрации нового пользователя или получения существующего
 func getOrCreateUser(tgUserID int, tgUsername string) (string, error) {
 	// Поиск пользователя по ID в PocketBase
-	searchURL := fmt.Sprintf("%s/api/collections/users/records?filter=id=%s", pocketBaseUrl, strconv.Itoa(tgUserID))
+	searchURL := fmt.Sprintf("%s/api/collections/users/records?filter=tgid=%d", pocketBaseUrl, tgUserID)
 	resp, err := sendAuthorizedRequest("GET", searchURL, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("ошибка при отправке запроса на поиск пользователя: %v", err)
 	}
 
 	var searchResult map[string]interface{}
-	json.Unmarshal(resp, &searchResult)
+	if err := json.Unmarshal(resp, &searchResult); err != nil {
+		return "", fmt.Errorf("ошибка разбора ответа: %v, ответ: %s", err, string(resp))
+	}
 
-	if searchResult["code"] == nil {
-		records := searchResult["items"].([]interface{})
-		if len(records) > 0 {
-			userId := records[0].(map[string]interface{})["id"].(string)
-			return userId, nil
+	// Проверка наличия records в ответе
+	if items, ok := searchResult["items"].([]interface{}); ok && len(items) > 0 {
+		if user, ok := items[0].(map[string]interface{}); ok {
+			if userID, ok := user["id"]; ok {
+				if idStr, ok := userID.(string); ok && idStr != "" {
+					return idStr, nil
+				}
+			}
 		}
 	}
 
 	// Если не найден — нужно создать
 	userData := map[string]interface{}{
-		"id":                 tgUserID,
+		"tgid":               tgUserID,
 		"username":           tgUsername,
 		"circle_count":       0,
 		"face_replace_count": 0,
@@ -120,13 +130,20 @@ func getOrCreateUser(tgUserID int, tgUsername string) (string, error) {
 	createUserURL := fmt.Sprintf("%s/api/collections/users/records", pocketBaseUrl)
 	createResp, err := sendAuthorizedRequest("POST", createUserURL, userDataJson)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("ошибка при отправке запроса на создание пользователя: %v", err)
 	}
 
 	var createdUser map[string]interface{}
-	json.Unmarshal(createResp, &createdUser)
+	if err := json.Unmarshal(createResp, &createdUser); err != nil {
+		return "", fmt.Errorf("ошибка разбора ответа на создание пользователя: %v, ответ: %s", err, string(createResp))
+	}
 
-	return createdUser["id"].(string), nil
+	// Проверка правильности записи созданного пользователя
+	if userID, ok := createdUser["tgid"].(string); ok && userID != "" {
+		return userID, nil
+	}
+
+	return "", fmt.Errorf("не удалось получить ID созданного пользователя из ответа: %s", string(createResp))
 }
 
 // Function for creating face_swap job
@@ -255,7 +272,6 @@ func main() {
 			continue
 		}
 
-		// Обработка получения фотографии
 		// Обработка получения фотографии
 		if update.Message.Photo != nil {
 			// Получаем последний элемент массива Photo, так как это самое большое фото
