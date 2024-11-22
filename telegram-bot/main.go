@@ -121,6 +121,7 @@ func main() {
 	// updates on telegram API
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
+	var tempFaceFileID string // media tmp
 
 	// Основной обработчик
 	updates := bot.GetUpdatesChan(u)
