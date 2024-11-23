@@ -28,4 +28,3 @@ go.work.sum
 data/
 pocketbase/pb_data
 notes.txt
-cache
