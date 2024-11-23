@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -111,13 +112,14 @@ func getOrCreateUser(tgUserID int, tgUsername string) (string, error) {
 		if user, ok := items[0].(map[string]interface{}); ok {
 			if userID, ok := user["id"]; ok {
 				if idStr, ok := userID.(string); ok && idStr != "" {
+					// Пользователь найден, возвращаем его ID
 					return idStr, nil
 				}
 			}
 		}
 	}
 
-	// Если не найден — нужно создать
+	// Если пользователь не найден, создаем нового пользователя
 	userData := map[string]interface{}{
 		"tgid":               tgUserID,
 		"username":           tgUsername,
@@ -139,30 +141,166 @@ func getOrCreateUser(tgUserID int, tgUsername string) (string, error) {
 	}
 
 	// Проверка правильности записи созданного пользователя
-	if userID, ok := createdUser["tgid"].(string); ok && userID != "" {
+	if userID, ok := createdUser["id"].(string); ok && userID != "" {
+		// Новый пользователь создан, возвращаем его ID
 		return userID, nil
 	}
 
 	return "", fmt.Errorf("не удалось получить ID созданного пользователя из ответа: %s", string(createResp))
 }
 
-// Function for creating face_swap job
-func createFaceJob(userID, mediaFileID, faceFileID string) error {
-	jobData := map[string]interface{}{
-		"owner":       userID,
-		"input_media": mediaFileID,
-		"input_face":  faceFileID,
-		"status":      "queued",
-	}
-
-	jobDataJson, _ := json.Marshal(jobData)
-	createJobURL := fmt.Sprintf("%s/api/collections/face_jobs/records", pocketBaseUrl)
-
-	_, err := sendAuthorizedRequest("POST", createJobURL, jobDataJson)
+// Функция для скачивания файла из Telegram
+func downloadTelegramFile(bot *tgbotapi.BotAPI, fileID, destinationPath string) error {
+	// Получить информацию о файле
+	file, err := bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
 	if err != nil {
-		return err
+		return fmt.Errorf("не удалось получить файл по ID: %v", err)
 	}
 
+	// Сформировать URL для скачивания
+	fileURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", bot.Token, file.FilePath)
+
+	// Скачиваем файл
+	resp, err := http.Get(fileURL)
+	if err != nil {
+		return fmt.Errorf("не удалось скачать файл: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Проверяем успешность ответа
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("не удалось скачать файл, статус: %s", resp.Status)
+	}
+
+	// Создаём файл на диске
+	out, err := os.Create(destinationPath)
+	if err != nil {
+		return fmt.Errorf("не удалось создать файл: %v", err)
+	}
+	defer out.Close()
+
+	// Сохраняем содержимое ответа в файл
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		return fmt.Errorf("не удалось сохранить содержимое файла: %v", err)
+	}
+
+	return nil
+}
+
+// Функция для создания Face Job
+func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFileID string) error {
+	// Открываем файлы перед отправкой
+	// Создаём папку для пользователя
+	userDir := fmt.Sprintf("data/%s", userID)
+	err := os.MkdirAll(userDir, os.ModePerm)
+	if err != nil {
+		return fmt.Errorf("не удалось создать директорию пользователя: %v", err)
+	}
+
+	// Скачиваем видеофайл
+	inputMediaPath := fmt.Sprintf("%s/%s.mp4", userDir, inputMediaFileID)
+	err = downloadTelegramFile(bot, inputMediaFileID, inputMediaPath)
+	if err != nil {
+		return fmt.Errorf("не удалось скачать видеофайл: %v", err)
+	}
+
+	// Скачиваем файл лица
+	inputFacePath := fmt.Sprintf("%s/%s.jpeg", userDir, inputFaceFileID)
+	err = downloadTelegramFile(bot, inputFaceFileID, inputFacePath)
+	if err != nil {
+		return fmt.Errorf("не удалось скачать файл лица: %v", err)
+	}
+
+	inputMediaFile, err := os.Open(inputMediaPath)
+	if err != nil {
+		return fmt.Errorf("не удалось открыть видеофайл: %v", err)
+	}
+	defer inputMediaFile.Close()
+
+	inputFaceFile, err := os.Open(inputFacePath)
+	if err != nil {
+		return fmt.Errorf("не удалось открыть файл лица: %v", err)
+	}
+	defer inputFaceFile.Close()
+
+	// Проверяем размер видео
+	fileInfo, err := inputMediaFile.Stat()
+	if err != nil {
+		return fmt.Errorf("не удалось получить информацию о видеофайле: %v", err)
+	}
+	if fileInfo.Size() > 50*1024*1024 {
+		return fmt.Errorf("размер видео превышает 50 МБ")
+	}
+
+	// Проверяем размер файла лица
+	faceFileInfo, err := inputFaceFile.Stat()
+	if err != nil {
+		return fmt.Errorf("не удалось получить информацию о файле лица: %v", err)
+	}
+	if faceFileInfo.Size() > 50*1024*1024 {
+		return fmt.Errorf("размер файла лица превышает 50 МБ")
+	}
+
+	// Создаем body для multipart/form-data
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	// Добавляем метаданные (например, владелец и статус)
+	_ = writer.WriteField("owner", userID)
+	_ = writer.WriteField("status", "queued") // Статус задачи по умолчанию
+
+	// Добавляем файлы в request
+	mediaPart, err := writer.CreateFormFile("input_media", fileInfo.Name())
+	if err != nil {
+		return fmt.Errorf("не удалось создать часть для видеофайла: %v", err)
+	}
+	_, err = io.Copy(mediaPart, inputMediaFile)
+	if err != nil {
+		return fmt.Errorf("не удалось загрузить видеофайл: %v", err)
+	}
+
+	facePart, err := writer.CreateFormFile("input_face", faceFileInfo.Name())
+	if err != nil {
+		return fmt.Errorf("не удалось создать часть для файла лица: %v", err)
+	}
+	_, err = io.Copy(facePart, inputFaceFile)
+	if err != nil {
+		return fmt.Errorf("не удалось загрузить файл лица: %v", err)
+	}
+
+	// Закрываем writer, чтобы завершить формирование multipart
+	err = writer.Close()
+	if err != nil {
+		return fmt.Errorf("не удалось завершить формирование multipart: %v", err)
+	}
+
+	// Формируем запрос
+	createJobURL := fmt.Sprintf("%s/api/collections/face_jobs/records", pocketBaseUrl)
+	req, err := http.NewRequest("POST", createJobURL, body)
+	if err != nil {
+		return fmt.Errorf("не удалось создать HTTP-запрос для создания задачи: %v", err)
+	}
+
+	// Устанавливаем заголовки
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", authToken)) // Добавляем токен авторизации
+
+	// Выполняем запрос
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("ошибка выполнения запроса на создание face job: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Обрабатываем статус ответа
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("ошибка создания face job, код: %d, ответ: %s", resp.StatusCode, string(respBody))
+	}
+
+	fmt.Println("Задача Face Job успешно создана.")
 	return nil
 }
 
@@ -297,10 +435,10 @@ func main() {
 
 			// Если фото уже было отправлено до этого
 			if tempFaceFileID != "" {
-				err := createFaceJob(pbUserID, videoFileID, tempFaceFileID)
+				err := createFaceJob(bot, pbUserID, videoFileID, tempFaceFileID)
 				if err != nil {
 					log.Printf("Не удалось создать задание на замену лица: %v", err)
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания.")
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Произошла ошибка при создании задания: %v", err))
 					bot.Send(msg)
 					continue
 				}

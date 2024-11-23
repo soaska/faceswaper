@@ -193,6 +193,20 @@
     "schema": [
       {
         "system": false,
+        "id": "vqlz3wsv",
+        "name": "tgid",
+        "type": "number",
+        "required": false,
+        "presentable": false,
+        "unique": false,
+        "options": {
+          "min": null,
+          "max": null,
+          "noDecimal": false
+        }
+      },
+      {
+        "system": false,
         "id": "tekw5iqf",
         "name": "username",
         "type": "text",
