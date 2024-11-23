@@ -27,3 +27,4 @@ go.work.sum
 # data for testing
 data/
 pocketbase/pb_data
+notes.txt
