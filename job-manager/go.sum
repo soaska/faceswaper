@@ -1,0 +1,4 @@
+github.com/OvyFlash/telegram-bot-api v0.0.0-20241107191146-851f2334eccf h1:251Y8IYF/xv9NwGYjPPmmDYMHxW8v9rMe9pJzO3p0PQ=
+github.com/OvyFlash/telegram-bot-api v0.0.0-20241107191146-851f2334eccf/go.mod h1:pXEWqoOf5pKa4257nw03IyJzKyOBU0fgC88CaHGHzkQ=
+github.com/joho/godotenv v1.5.1 h1:7eLL/+HRGLY0ldzfGMeQkb7vMd0as4CfYvUVzLqw0N0=
+github.com/joho/godotenv v1.5.1/go.mod h1:f4LDr5Voq0i2e/R5DDNOoa2zzDfwtkZa6DnEwAbqwq4=
