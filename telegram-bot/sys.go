@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"os"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 	"github.com/joho/godotenv"
 )
 
@@ -18,7 +18,6 @@ var pocketBaseUrl string
 var email string
 var password string
 var authToken string
-
 
 // just for sending search requests to pocketbase
 func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
@@ -46,8 +45,6 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 
 	return body, nil
 }
-
-
 
 func downloadTelegramFile(bot *tgbotapi.BotAPI, fileID, destinationPath string) error {
 	file, err := bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
@@ -83,10 +80,8 @@ func downloadTelegramFile(bot *tgbotapi.BotAPI, fileID, destinationPath string) 
 	return nil
 }
 
-
-
 // loading env variables from .env or system environment
-func LoadEnvironment() (string, bool) {
+func LoadEnvironment() (string, bool, string) {
 	if os.Getenv("DOCKER_BUILD") == `` {
 		err := godotenv.Load()
 		if err != nil {
@@ -106,6 +101,17 @@ func LoadEnvironment() (string, bool) {
 		bot_debug = true
 	} else {
 		bot_debug = false
+	}
+
+	bot_endpoint := os.Getenv("TELEGRAM_API")
+	if bot_endpoint == `` {
+		bot_endpoint = "https://api.telegram.org"
+	} else {
+		// validate db url
+		_, err := url.ParseRequestURI(bot_endpoint)
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	// pocketbase
@@ -129,5 +135,5 @@ func LoadEnvironment() (string, bool) {
 		log.Fatal("empty pocketbase password loaded. env is not correct or configuration is insecure")
 	}
 
-	return bot_token, bot_debug
+	return bot_token, bot_debug, bot_endpoint
 }

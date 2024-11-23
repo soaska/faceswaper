@@ -5,7 +5,7 @@ import (
 	"log"
 	"strings"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
 // для обработки команды /status
@@ -81,7 +81,7 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 
 func main() {
 	// load variables
-	BOT_TOKEN, BOT_DEBUG := LoadEnvironment()
+	BOT_TOKEN, BOT_DEBUG, BOT_ENDPOINT := LoadEnvironment()
 
 	// auth pocketbase
 	err := authenticatePocketBase()
@@ -90,7 +90,7 @@ func main() {
 	}
 
 	// start the bot
-	bot, err := tgbotapi.NewBotAPI(BOT_TOKEN)
+	bot, err := tgbotapi.NewBotAPIWithAPIEndpoint(BOT_TOKEN, BOT_ENDPOINT+`/bot%s/%s`)
 	if err != nil {
 		panic(err)
 	} else {
