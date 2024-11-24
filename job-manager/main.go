@@ -47,7 +47,7 @@ func processCircleJobs() {
 		err = processTask(task)
 		if err != nil {
 			log.Printf("Ошибка обработки задачи %s: %v", task.ID, err)
-			updateTaskStatus(task.ID, "error")
+			updateTaskStatus(task.ID, fmt.Sprintf("error: %v", err)[:min(len(fmt.Sprintf("error: %v", err)), 255)])
 			continue
 		}
 
@@ -65,6 +65,7 @@ func processCircleJobs() {
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'completed' для задачи %s: %v", task.ID, err)
 		}
+
 	}
 }
 
@@ -172,7 +173,7 @@ func processVideo(inputPath, outputPath string) error {
 	cmd := exec.Command(
 		"ffmpeg",
 		"-i", inputPath,
-		"-vf", "scale=512:512",
+		"-vf", "crop=min(iw\\,ih):min(iw\\,ih):(iw-min(iw\\,ih))/2:(ih-min(iw\\,ih))/2,scale=512:512",
 		"-r", "30",
 		"-t", "60",
 		"-c:v", "libx264",
@@ -239,6 +240,44 @@ func uploadOutputMedia(taskID, filePath string) error {
 		return fmt.Errorf("Ошибка загрузки файла: статус %d, ответ: %s", resp.StatusCode, string(respBody))
 	}
 
+	return nil
+}
+
+// Увеличение circle_count на 1 для владельца задачи
+func incrementCircleCount(tgUserID int) error {
+	userInfo, err := getUserInfo(tgUserID)
+	if err != nil {
+		return fmt.Errorf("Ошибка получения информации о пользователе с Telegram ID %d: %v", tgUserID, err)
+	}
+	currentCircleCount, ok := userInfo["circle_count"].(float64) // JSON numbers в Go парсятся в float64
+	if !ok {
+		currentCircleCount = 0
+	}
+
+	newCircleCount := int(currentCircleCount) + 1
+
+	updateData := map[string]interface{}{
+		"circle_count": newCircleCount,
+	}
+
+	userID, ok := userInfo["id"].(string)
+	if !ok {
+		return fmt.Errorf("Не удалось извлечь ID пользователя с Telegram ID %d", tgUserID)
+	}
+
+	updateURL := fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID)
+
+	jsonData, err := json.Marshal(updateData)
+	if err != nil {
+		return fmt.Errorf("Ошибка сериализации данных для обновления: %v", err)
+	}
+
+	_, err = sendAuthorizedRequest("PATCH", updateURL, jsonData)
+	if err != nil {
+		return fmt.Errorf("Ошибка обновления circle_count для пользователя %s: %v", userID, err)
+	}
+
+	// log.Printf("circle_count для пользователя с Telegram ID %d успешно обновлен. Новое значение: %d", tgUserID, newCircleCount)
 	return nil
 }
 
@@ -342,6 +381,17 @@ func notifyOwner(task *Task) error {
 	}
 
 	log.Printf("Видеосообщение отправлено владельцу задачи %s (Telegram ID: %s).", task.ID, ownerTGID)
+
+	// Увеличиваем счетчик кружков (circle_count) для владельца
+	tgid, err := strconv.Atoi(ownerTGID)
+	if err != nil {
+		return fmt.Errorf("Ошибка преобразования telegram id в int: %s", err)
+	}
+	err = incrementCircleCount(tgid)
+	if err != nil {
+		log.Printf("Ошибка обновления circle_count для владельца задачи %s: %v", task.ID, err)
+	}
+
 	return nil
 }
 

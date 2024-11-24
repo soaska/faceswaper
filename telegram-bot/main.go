@@ -79,6 +79,23 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 	return nil
 }
 
+type UserSession struct {
+	FaceFileID string // временное хранение ID файла фотографии
+}
+
+// Функция для получения или создания сессии пользователя
+func getUserSession(userID int) *UserSession {
+	if session, ok := userSessions[userID]; ok {
+		return session
+	}
+	// Создаем новую сессию, если её еще нет
+	userSessions[userID] = &UserSession{}
+	return userSessions[userID]
+}
+
+// Хранилище сессий пользователей
+var userSessions = make(map[int]*UserSession)
+
 func main() {
 	// load variables
 	BOT_TOKEN, BOT_DEBUG, BOT_ENDPOINT := LoadEnvironment()
@@ -104,8 +121,8 @@ func main() {
 	// updates on telegram API
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
-	var tempFaceFileID string // media tmp
 
+	// Основной обработчик
 	updates := bot.GetUpdatesChan(u)
 	for update := range updates {
 		if update.Message == nil {
@@ -120,6 +137,9 @@ func main() {
 			log.Printf("Ошибка при получении/создании пользователя: %v", err)
 			continue
 		}
+
+		// Получаем сессию для текущего пользователя
+		session := getUserSession(int(userID))
 
 		// Приветственное сообщение
 		if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "start") {
@@ -146,18 +166,15 @@ func main() {
 				bot.Send(msg)
 				continue
 			}
-
 			continue
 		}
 
 		// Обработка получения фотографии
 		if update.Message.Photo != nil {
-			// Получаем последний элемент массива Photo
 			fileID := update.Message.Photo[len(update.Message.Photo)-1].FileID
-			tempFaceFileID = fileID // сохраняем ID для будущего использования с видео
+			session.FaceFileID = fileID // сохраняем ID фото для текущего пользователя
 
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Получена фотография. Пожалуйста, отправьте видео для замены лица.")
-			// Кнопка отмены
 			cancelMarkup := tgbotapi.NewReplyKeyboard(
 				tgbotapi.NewKeyboardButtonRow(
 					tgbotapi.NewKeyboardButton("Отменить"),
@@ -170,12 +187,11 @@ func main() {
 
 		// Обработка получения видео
 		if update.Message.Video != nil {
-			// Получаем видеофайл
 			videoFileID := update.Message.Video.FileID
 
-			// Если фото уже было отправлено до этого
-			if tempFaceFileID != "" {
-				err, JobID := createFaceJob(bot, pbUserID, videoFileID, tempFaceFileID)
+			// Проверяем, есть ли фото в сессии пользователя
+			if session.FaceFileID != "" {
+				err, jobID := createFaceJob(bot, pbUserID, videoFileID, session.FaceFileID)
 				if err != nil {
 					log.Printf("Не удалось создать задание на замену лица: %v", err)
 					msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Произошла ошибка при создании задания: %v", err))
@@ -183,15 +199,14 @@ func main() {
 					continue
 				}
 
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше видео поставлено в очередь для обработки. Статус: В очереди. ID: %s.", JobID))
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше видео поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
 				bot.Send(msg)
 
-				// Сбрасываем временные переменные после создания задания
-				tempFaceFileID = ""
-				videoFileID = ""
+				// Сбрасываем данные сессии
+				session.FaceFileID = ""
 				continue
 			} else {
-				err, JobID := createCircleJob(bot, pbUserID, videoFileID)
+				err, jobID := createCircleJob(bot, pbUserID, videoFileID)
 				if err != nil {
 					log.Printf("Не удалось создать задание на создание кружочка: %v", err)
 					msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Произошла ошибка при создании задания: %v", err))
@@ -199,19 +214,17 @@ func main() {
 					continue
 				}
 
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше видео поставлено в очередь для обработки. Статус: В очереди. ID: %s.", JobID))
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше видео поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
 				bot.Send(msg)
 
-				// Сбрасываем временные переменные после создания задания
-				tempFaceFileID = ""
-				videoFileID = ""
+				// Сбрасываем временные данные
 				continue
 			}
 		}
 
-		// Отмена операции
+		// Обработка команды отмены
 		if update.Message.Text == "Отменить" {
-			tempFaceFileID = "" // Обнуляем данные
+			session.FaceFileID = "" // Сбрасываем временные данные в сессии
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Операция отменена.")
 			bot.Send(msg)
 			continue
