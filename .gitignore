@@ -29,4 +29,3 @@ data/
 pocketbase/pb_data
 notes.txt
 cache
-docker-compose.yaml
