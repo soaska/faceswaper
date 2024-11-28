@@ -8,6 +8,31 @@
 отслеживания ошибок, которые сохраняются в базе данных с графическим интерфейсом. Задачи можно перезапускать,
 и они не сбрасываются при перезапуске бота.
 
+# Запуск в контейнере
+Скопируем код
+```shell
+git clone https://github.com/soaska/faceswaper.git
+cd faceswaper
+```
+
+Заполним окружение
+```shell
+cp example.env .env
+vim .env
+```
+
+Запустим pocketbase, удалим существующую коллекцию users, затем перейдем во вкладку
+settings / import collections. Далее в меню load from json выбираем [файл](https://github.com/soaska/faceswaper/blob/main/pocketbase/collections/PB%20Schema.json)
+`pocketbase/collections/PB Schema.json`
+```shell
+podman compose up pocketbase
+```
+
+Теперь можем запускать бота и воркер.
+```shell
+podman compose up -d --build
+```
+
 # Запуск
 Запустим pocketbase по [этой](https://pocketbase.io/docs/) инструкции.
 Зайдем во вкладку settings / import collections. Далее в меню load from json выбираем [файл](https://github.com/soaska/faceswaper/blob/main/pocketbase/collections/PB%20Schema.json)
@@ -49,6 +74,6 @@ go run .
 Бот отвечает на сообщения с помощью компонента *telegram-bot*, задачи выполняются *job-manager*.
 Компоненты связаны базой данных pocketbase, все операции выполняются через нее, ее наличие
 обязательно. Папки `telegram-bot/data` и `job-manager/cache` содержат только временные файлы и
-могут быть удалены в период неактивности программы.
+могут быть удалены в период неактивности программы. job-manager требует ffmpeg.
 
 По вопросам пишите в [issues](https://github.com/soaska/faceswaper/issues) или на почту soaska@cornspace.su.

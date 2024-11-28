@@ -20,6 +20,7 @@
 # Go workspace file
 go.work
 go.work.sum
+.DS_Store
 
 # env file
 .env
@@ -30,3 +31,4 @@ pocketbase/pb_data
 notes.txt
 cache
 docker-compose.yaml
+pb_data

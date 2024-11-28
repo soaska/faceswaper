@@ -1,0 +1,34 @@
+services:
+  pocketbase:
+    build:
+      context: ./pocketbase
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - 8080:8080
+    volumes:
+      - ./pb_data:/pb/pb_data
+
+  telegram-bot:
+    build:
+      context: ./job-manager
+      dockerfile: Dockerfile
+    environment:
+      - DOCKER_BUILD=yas
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      - pocketbase
+
+  job-manager:
+    build:
+      context: ./telegram-bot
+      dockerfile: Dockerfile
+    environment:
+      - DOCKER_BUILD=yas
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      - pocketbase
