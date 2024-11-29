@@ -21,8 +21,7 @@ cp example.env .env
 vim .env
 ```
 
-Запустим pocketbase, удалим существующую коллекцию users, затем перейдем во вкладку
-settings / import collections. Далее в меню load from json выбираем [файл](https://github.com/soaska/faceswaper/blob/main/pocketbase/collections/PB%20Schema.json)
+Запустим pocketbase, перейдем по её [url](http://0.0.0.0:8080/_/), создадим пользователя.
 `pocketbase/collections/PB Schema.json`
 ```shell
 podman compose up pocketbase
@@ -34,7 +33,7 @@ podman compose up -d --build
 ```
 
 # Запуск
-Запустим pocketbase по [этой](https://pocketbase.io/docs/) инструкции.
+Запустим pocketbase по [этой](https://pocketbase.io/docs/) инструкции. Удалим collection `users`.
 Зайдем во вкладку settings / import collections. Далее в меню load from json выбираем [файл](https://github.com/soaska/faceswaper/blob/main/pocketbase/collections/PB%20Schema.json)
 pocketbase/collections/PB Schema.json
 
