@@ -151,7 +151,7 @@ func main() {
 
 		// help
 		if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "help") {
-			helpMessage := "Напиши мне фото для выполнения задачи по замене лица. Пришли видео для создания кружочка."
+			helpMessage := "Напиши мне фото для создания задачи по замене лица (временно недоступно). Пришли видео для создания кружочка."
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, helpMessage)
 			bot.Send(msg)
 			continue
@@ -188,6 +188,8 @@ func main() {
 		// Обработка получения видео
 		if update.Message.Video != nil {
 			videoFileID := update.Message.Video.FileID
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ловлю!")
+			bot.Send(msg)
 
 			// Проверяем, есть ли фото в сессии пользователя
 			if session.FaceFileID != "" {

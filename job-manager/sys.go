@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
@@ -110,25 +109,14 @@ func LoadEnvironment() (string, bool, string) {
 	bot_endpoint := os.Getenv("TELEGRAM_API")
 	if bot_endpoint == `` {
 		bot_endpoint = "https://api.telegram.org"
-	} else {
-		// validate db url
-		_, err := url.ParseRequestURI(bot_endpoint)
-		if err != nil {
-			log.Fatal(err)
-		}
 	}
 
 	// pocketbase
 	pocketBaseUrl = os.Getenv("POCKETBASE_URL")
 	if pocketBaseUrl == `` {
 		log.Fatal("empty pocketbase url loaded, check POCKETBASE_URL value")
-	} else {
-		// validate db url
-		_, err := url.ParseRequestURI(pocketBaseUrl)
-		if err != nil {
-			log.Fatal(err)
-		}
 	}
+
 	email = os.Getenv("POCKETBASE_LOGIN")
 	if email == `` {
 		log.Fatal("empty pocketbase login loaded. env is not correct or configuration is insecure")

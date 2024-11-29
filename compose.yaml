@@ -1,5 +1,21 @@
 services:
+  # own telegram api server
+  # needed to download / upload large files
+  # Container link: https://github.com/aiogram/telegram-bot-api
+  # Info about limitations: https://core.telegram.org/bots/api#using-a-local-bot-api-server
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api:latest
+    hostname: tgapi
+    env_file:
+      - .env
+    volumes:
+      - ./data/telegram-bot-api:/var/lib/telegram-bot-api
+    ports:
+      - "8081:8081"
+      - "8082:8082" # statistics
+
   pocketbase:
+    hostname: pocketbase
     build:
       context: ./pocketbase
       dockerfile: Dockerfile
@@ -8,8 +24,13 @@ services:
       - 8080:8080
     volumes:
       - ./pb_data:/pb/pb_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
-  telegram-bot:
+  job-manager:
     build:
       context: ./job-manager
       dockerfile: Dockerfile
@@ -20,8 +41,9 @@ services:
     restart: unless-stopped
     depends_on:
       - pocketbase
+      - telegram-bot-api
 
-  job-manager:
+  telegram-bot:
     build:
       context: ./telegram-bot
       dockerfile: Dockerfile
@@ -32,3 +54,4 @@ services:
     restart: unless-stopped
     depends_on:
       - pocketbase
+      - telegram-bot-api
