@@ -23,7 +23,7 @@ services:
     ports:
       - 8080:8080
     volumes:
-      - ./pb_data:/pb/pb_data
+      - ./data/pocketbase:/pb/pb_data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
       interval: 30s

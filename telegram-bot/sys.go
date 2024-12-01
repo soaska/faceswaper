@@ -53,6 +53,7 @@ func downloadTelegramFile(bot *tgbotapi.BotAPI, fileID, destinationPath string) 
 	}
 
 	fileURL := fmt.Sprintf("%s/file/bot%s/%s", api_endpint, bot.Token, file.FilePath)
+	log.Println(fileURL)
 
 	// Download request
 	resp, err := http.Get(fileURL)

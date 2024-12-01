@@ -108,37 +108,37 @@ func getOrCreateUser(tgUserID int, tgUsername string) (string, error) {
 }
 
 // Face replacement job creation
-func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFileID string) (error, string) {
+func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFileID string) (string, error) {
 	// file dir creation
 	userDir := fmt.Sprintf("data/%s", userID)
 	err := os.MkdirAll(userDir, os.ModePerm)
 	if err != nil {
-		return fmt.Errorf("не удалось создать директорию пользователя: %v", err), ""
+		return "", fmt.Errorf("не удалось создать директорию пользователя: %v", err)
 	}
 
 	// file download
 	inputMediaPath := fmt.Sprintf("%s/%s.mp4", userDir, inputMediaFileID)
 	err = downloadTelegramFile(bot, inputMediaFileID, inputMediaPath)
 	if err != nil {
-		return fmt.Errorf("не удалось скачать видеофайл: %v", err), ""
+		return "", fmt.Errorf("не удалось скачать видеофайл: %v", err)
 	}
 
 	inputFacePath := fmt.Sprintf("%s/%s.jpeg", userDir, inputFaceFileID)
 	err = downloadTelegramFile(bot, inputFaceFileID, inputFacePath)
 	if err != nil {
-		return fmt.Errorf("не удалось скачать файл лица: %v", err), ""
+		return "", fmt.Errorf("не удалось скачать файл лица: %v", err)
 	}
 
 	// file checker
 	inputMediaFile, err := os.Open(inputMediaPath)
 	if err != nil {
-		return fmt.Errorf("не удалось открыть видеофайл: %v", err), ""
+		return "", fmt.Errorf("не удалось открыть видеофайл: %v", err)
 	}
 	defer inputMediaFile.Close()
 
 	inputFaceFile, err := os.Open(inputFacePath)
 	if err != nil {
-		return fmt.Errorf("не удалось открыть файл лица: %v", err), ""
+		return "", fmt.Errorf("не удалось открыть файл лица: %v", err)
 	}
 	defer inputFaceFile.Close()
 
@@ -146,18 +146,18 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 	// needed for testing. will be removed.
 	fileInfo, err := inputMediaFile.Stat()
 	if err != nil {
-		return fmt.Errorf("не удалось получить информацию о видеофайле: %v", err), ""
+		return "", fmt.Errorf("не удалось получить информацию о видеофайле: %v", err)
 	}
 	if fileInfo.Size() > 50*1024*1024 {
-		return fmt.Errorf("размер видео превышает 50 МБ"), ""
+		return "", fmt.Errorf("размер видео превышает 50 МБ")
 	}
 
 	faceFileInfo, err := inputFaceFile.Stat()
 	if err != nil {
-		return fmt.Errorf("не удалось получить информацию о файле лица: %v", err), ""
+		return "", fmt.Errorf("не удалось получить информацию о файле лица: %v", err)
 	}
 	if faceFileInfo.Size() > 50*1024*1024 {
-		return fmt.Errorf("размер файла лица превышает 50 МБ"), ""
+		return "", fmt.Errorf("размер файла лица превышает 50 МБ")
 	}
 
 	// body for multipart/form-data
@@ -171,33 +171,33 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 	// Добавляем файлы в request
 	mediaPart, err := writer.CreateFormFile("input_media", fileInfo.Name())
 	if err != nil {
-		return fmt.Errorf("не удалось создать часть для видеофайла: %v", err), ""
+		return "", fmt.Errorf("не удалось создать часть для видеофайла: %v", err)
 	}
 	_, err = io.Copy(mediaPart, inputMediaFile)
 	if err != nil {
-		return fmt.Errorf("не удалось загрузить видеофайл: %v", err), ""
+		return "", fmt.Errorf("не удалось загрузить видеофайл: %v", err)
 	}
 
 	facePart, err := writer.CreateFormFile("input_face", faceFileInfo.Name())
 	if err != nil {
-		return fmt.Errorf("не удалось создать часть для файла лица: %v", err), ""
+		return "", fmt.Errorf("не удалось создать часть для файла лица: %v", err)
 	}
 	_, err = io.Copy(facePart, inputFaceFile)
 	if err != nil {
-		return fmt.Errorf("не удалось загрузить файл лица: %v", err), ""
+		return "", fmt.Errorf("не удалось загрузить файл лица: %v", err)
 	}
 
 	// Закрываем writer, чтобы завершить формирование multipart
 	err = writer.Close()
 	if err != nil {
-		return fmt.Errorf("не удалось завершить формирование multipart: %v", err), ""
+		return "", fmt.Errorf("не удалось завершить формирование multipart: %v", err)
 	}
 
 	// Формируем запрос
 	createJobURL := fmt.Sprintf("%s/api/collections/face_jobs/records", pocketBaseUrl)
 	req, err := http.NewRequest("POST", createJobURL, body)
 	if err != nil {
-		return fmt.Errorf("не удалось создать HTTP-запрос для создания задачи: %v", err), ""
+		return "", fmt.Errorf("не удалось создать HTTP-запрос для создания задачи: %v", err)
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -207,50 +207,50 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("ошибка выполнения запроса на создание face job: %v", err), ""
+		return "", fmt.Errorf("ошибка выполнения запроса на создание face job: %v", err)
 	}
 	defer resp.Body.Close()
 
 	// Обрабатываем ответ
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("ошибка создания face job, код: %d, ответ: %s", resp.StatusCode, string(respBody)), ""
+		return "", fmt.Errorf("ошибка создания face job, код: %d, ответ: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return fmt.Errorf("ошибка парсинга ответа JSON: %v", err), ""
+		return "", fmt.Errorf("ошибка парсинга ответа JSON: %v", err)
 	}
 
 	jobID, ok := result["id"].(string)
 	if !ok || jobID == "" {
-		return fmt.Errorf("не удалось получить ID новой задачи, ответ: %s", string(respBody)), ""
+		return "", fmt.Errorf("не удалось получить ID новой задачи, ответ: %s", string(respBody))
 	}
 
 	log.Printf("Задача Circle Job успешно создана с ID: %s", jobID)
-	return nil, jobID
+	return jobID, nil
 }
 
 // Функция для создания Circle Job
-func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID string) (error, string) {
+func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID string) (string, error) {
 	// file dir creation
 	userDir := fmt.Sprintf("data/%s", userID)
 	err := os.MkdirAll(userDir, os.ModePerm)
 	if err != nil {
-		return fmt.Errorf("не удалось создать директорию пользователя: %v", err), ""
+		return "", fmt.Errorf("не удалось создать директорию пользователя: %v", err)
 	}
 
 	// file download
 	inputMediaPath := fmt.Sprintf("%s/%s.mp4", userDir, inputMediaFileID)
 	err = downloadTelegramFile(bot, inputMediaFileID, inputMediaPath)
 	if err != nil {
-		return fmt.Errorf("не удалось скачать видеофайл: %v", err), ""
+		return "", fmt.Errorf("не удалось скачать видеофайл: %v", err)
 	}
 
 	// file check
 	inputMediaFile, err := os.Open(inputMediaPath)
 	if err != nil {
-		return fmt.Errorf("не удалось открыть видеофайл: %v", err), ""
+		return "", fmt.Errorf("не удалось открыть видеофайл: %v", err)
 	}
 	defer inputMediaFile.Close()
 
@@ -258,10 +258,10 @@ func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID string) (err
 	// needed for testing. will be removed.
 	fileInfo, err := inputMediaFile.Stat()
 	if err != nil {
-		return fmt.Errorf("не удалось получить информацию о видеофайле: %v", err), ""
+		return "", fmt.Errorf("не удалось получить информацию о видеофайле: %v", err)
 	}
 	if fileInfo.Size() > 50*1024*1024 {
-		return fmt.Errorf("размер видео превышает 50 МБ"), ""
+		return "", fmt.Errorf("размер видео превышает 50 МБ")
 	}
 
 	// Создаем body для multipart/form-data
@@ -275,24 +275,24 @@ func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID string) (err
 	// Добавляем файлы в request
 	mediaPart, err := writer.CreateFormFile("input_media", fileInfo.Name())
 	if err != nil {
-		return fmt.Errorf("не удалось создать часть для видеофайла: %v", err), ""
+		return "", fmt.Errorf("не удалось создать часть для видеофайла: %v", err)
 	}
 	_, err = io.Copy(mediaPart, inputMediaFile)
 	if err != nil {
-		return fmt.Errorf("не удалось загрузить видеофайл: %v", err), ""
+		return "", fmt.Errorf("не удалось загрузить видеофайл: %v", err)
 	}
 
 	// Закрываем writer, чтобы завершить формирование multipart
 	err = writer.Close()
 	if err != nil {
-		return fmt.Errorf("не удалось завершить формирование multipart: %v", err), ""
+		return "", fmt.Errorf("не удалось завершить формирование multipart: %v", err)
 	}
 
 	// Формируем запрос
 	createJobURL := fmt.Sprintf("%s/api/collections/circle_jobs/records", pocketBaseUrl)
 	req, err := http.NewRequest("POST", createJobURL, body)
 	if err != nil {
-		return fmt.Errorf("не удалось создать HTTP-запрос для создания задачи: %v", err), ""
+		return "", fmt.Errorf("не удалось создать HTTP-запрос для создания задачи: %v", err)
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -302,28 +302,28 @@ func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID string) (err
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("ошибка выполнения запроса на создание circle job: %v", err), ""
+		return "", fmt.Errorf("ошибка выполнения запроса на создание circle job: %v", err)
 	}
 	defer resp.Body.Close()
 
 	// Обрабатываем ответ
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("ошибка создания face job, код: %d, ответ: %s", resp.StatusCode, string(respBody)), ""
+		return "", fmt.Errorf("ошибка создания face job, код: %d, ответ: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(respBody, &result); err != nil {
-		return fmt.Errorf("ошибка парсинга ответа JSON: %v", err), ""
+		return "", fmt.Errorf("ошибка парсинга ответа JSON: %v", err)
 	}
 
 	jobID, ok := result["id"].(string)
 	if !ok || jobID == "" {
-		return fmt.Errorf("не удалось получить ID новой задачи, ответ: %s", string(respBody)), ""
+		return "", fmt.Errorf("не удалось получить ID новой задачи, ответ: %s", string(respBody))
 	}
 
 	log.Printf("Задача Circle Job успешно создана с ID: %s", jobID)
-	return nil, jobID
+	return jobID, nil
 }
 
 func getUserInfo(tgUserID int) (map[string]interface{}, error) {
@@ -331,12 +331,12 @@ func getUserInfo(tgUserID int) (map[string]interface{}, error) {
 	searchURL := fmt.Sprintf("%s/api/collections/users/records?filter=tgid=%d", pocketBaseUrl, tgUserID)
 	resp, err := sendAuthorizedRequest("GET", searchURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("Ошибка при запросе пользователя: %v", err)
+		return nil, fmt.Errorf("ошибка при запросе пользователя: %v", err)
 	}
 
 	var searchResult map[string]interface{}
 	if err := json.Unmarshal(resp, &searchResult); err != nil {
-		return nil, fmt.Errorf("Ошибка разбора ответа при получении пользователя: %v", err)
+		return nil, fmt.Errorf("ошибка разбора ответа при получении пользователя: %v", err)
 	}
 
 	if items, ok := searchResult["items"].([]interface{}); ok && len(items) > 0 {
@@ -345,7 +345,7 @@ func getUserInfo(tgUserID int) (map[string]interface{}, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("Пользователь с Telegram ID %d не найден", tgUserID)
+	return nil, fmt.Errorf("пользователь с Telegram ID %d не найден", tgUserID)
 }
 
 func getActiveJobs(userID, collection string) ([]map[string]interface{}, error) {
@@ -356,12 +356,12 @@ func getActiveJobs(userID, collection string) ([]map[string]interface{}, error) 
 
 	resp, err := sendAuthorizedRequest("GET", searchURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("Ошибка при запросе задач: %v", err)
+		return nil, fmt.Errorf("ошибка при запросе задач: %v", err)
 	}
 
 	var searchResult map[string]interface{}
 	if err := json.Unmarshal(resp, &searchResult); err != nil {
-		return nil, fmt.Errorf("Ошибка разбора ответа при получении задач: %v, ответ: %s", err, string(resp))
+		return nil, fmt.Errorf("ошибка разбора ответа при получении задач: %v, ответ: %s", err, string(resp))
 	}
 
 	if items, ok := searchResult["items"].([]interface{}); ok {
