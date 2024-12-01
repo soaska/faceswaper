@@ -6,10 +6,8 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 
-	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 	"github.com/joho/godotenv"
 )
 
@@ -50,40 +48,6 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 	return body, nil
 }
 
-func downloadTelegramFile(bot *tgbotapi.BotAPI, fileID, destinationPath string) error {
-	file, err := bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
-	if err != nil {
-		return fmt.Errorf("не удалось получить файл по ID: %v", err)
-	}
-
-	fileURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", bot.Token, file.FilePath)
-
-	// Download request
-	resp, err := http.Get(fileURL)
-	if err != nil {
-		return fmt.Errorf("не удалось скачать файл: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("не удалось скачать файл, статус: %s", resp.Status)
-	}
-
-	// Save on disk
-	out, err := os.Create(destinationPath)
-	if err != nil {
-		return fmt.Errorf("не удалось создать файл: %v", err)
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
-		return fmt.Errorf("не удалось сохранить содержимое файла: %v", err)
-	}
-
-	return nil
-}
-
 // loading env variables from .env or system environment
 func LoadEnvironment() (string, bool, string) {
 	if os.Getenv("DOCKER_BUILD") == `` {
@@ -110,25 +74,14 @@ func LoadEnvironment() (string, bool, string) {
 	bot_endpoint := os.Getenv("TELEGRAM_API")
 	if bot_endpoint == `` {
 		bot_endpoint = "https://api.telegram.org"
-	} else {
-		// validate db url
-		_, err := url.ParseRequestURI(bot_endpoint)
-		if err != nil {
-			log.Fatal(err)
-		}
 	}
 
 	// pocketbase
 	pocketBaseUrl = os.Getenv("POCKETBASE_URL")
 	if pocketBaseUrl == `` {
 		log.Fatal("empty pocketbase url loaded, check POCKETBASE_URL value")
-	} else {
-		// validate db url
-		_, err := url.ParseRequestURI(pocketBaseUrl)
-		if err != nil {
-			log.Fatal(err)
-		}
 	}
+
 	email = os.Getenv("POCKETBASE_LOGIN")
 	if email == `` {
 		log.Fatal("empty pocketbase login loaded. env is not correct or configuration is insecure")

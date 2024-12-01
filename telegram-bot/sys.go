@@ -2,11 +2,11 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
@@ -18,6 +18,7 @@ var pocketBaseUrl string
 var email string
 var password string
 var authToken string
+var api_endpint string
 
 // just for sending search requests to pocketbase
 func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
@@ -46,38 +47,41 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 	return body, nil
 }
 
-func downloadTelegramFile(bot *tgbotapi.BotAPI, fileID, destinationPath string) error {
-	file, err := bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
-	if err != nil {
-		return fmt.Errorf("не удалось получить файл по ID: %v", err)
-	}
+type FileResponse struct {
+	Ok     bool                   `json:"ok"`
+	Result map[string]interface{} `json:"result"`
+}
 
-	fileURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", bot.Token, file.FilePath)
-
-	// Download request
-	resp, err := http.Get(fileURL)
+func getTelegramFile(bot *tgbotapi.BotAPI, fileID string) (string, error) {
+	//file, err := bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
+	CallUrl := fmt.Sprintf("%s/bot%s/getFile?file_id=%s", api_endpint, bot.Token, fileID)
+	resp, err := http.Get(CallUrl)
 	if err != nil {
-		return fmt.Errorf("не удалось скачать файл: %v", err)
+		return "", fmt.Errorf("ошибка http запроса: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("не удалось скачать файл, статус: %s", resp.Status)
-	}
-
-	// Save on disk
-	out, err := os.Create(destinationPath)
+	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("не удалось создать файл: %v", err)
+		return "", fmt.Errorf("ошибка чтения ответа сервера: %v", err)
 	}
-	defer out.Close()
 
-	_, err = io.Copy(out, resp.Body)
+	fileResponse := &FileResponse{}
+	err = json.Unmarshal(responseBody, fileResponse)
 	if err != nil {
-		return fmt.Errorf("не удалось сохранить содержимое файла: %v", err)
+		return "", fmt.Errorf("ошибка расшифровки ответа JSON: %v", err)
 	}
 
-	return nil
+	if fileResponse.Ok {
+		filePath, ok := fileResponse.Result["file_path"]
+		if !ok || filePath == "" {
+			return "", fmt.Errorf("не найден путь в ответе сервера")
+		}
+		//serverPath := fmt.Sprintf("/storage/%s/%s", bot.Token, filePath.(string))
+		return filePath.(string), nil
+	} else {
+		return "", fmt.Errorf("ошибка получения пути: %v", resp.StatusCode)
+	}
 }
 
 // loading env variables from .env or system environment
@@ -103,28 +107,17 @@ func LoadEnvironment() (string, bool, string) {
 		bot_debug = false
 	}
 
-	bot_endpoint := os.Getenv("TELEGRAM_API")
-	if bot_endpoint == `` {
-		bot_endpoint = "https://api.telegram.org"
-	} else {
-		// validate db url
-		_, err := url.ParseRequestURI(bot_endpoint)
-		if err != nil {
-			log.Fatal(err)
-		}
+	api_endpint = os.Getenv("TELEGRAM_API")
+	if api_endpint == `` {
+		api_endpint = "https://api.telegram.org"
 	}
 
 	// pocketbase
 	pocketBaseUrl = os.Getenv("POCKETBASE_URL")
 	if pocketBaseUrl == `` {
 		log.Fatal("empty pocketbase url loaded, check POCKETBASE_URL value")
-	} else {
-		// validate db url
-		_, err := url.ParseRequestURI(pocketBaseUrl)
-		if err != nil {
-			log.Fatal(err)
-		}
 	}
+
 	email = os.Getenv("POCKETBASE_LOGIN")
 	if email == `` {
 		log.Fatal("empty pocketbase login loaded. env is not correct or configuration is insecure")
@@ -135,5 +128,5 @@ func LoadEnvironment() (string, bool, string) {
 		log.Fatal("empty pocketbase password loaded. env is not correct or configuration is insecure")
 	}
 
-	return bot_token, bot_debug, bot_endpoint
+	return bot_token, bot_debug, api_endpint
 }

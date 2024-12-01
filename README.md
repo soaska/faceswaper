@@ -3,7 +3,7 @@
 Отдельно запускаются телеграм бот, который отвечает на запросы пользователя, работает с базой данных и
 создает задачи, база данных pocketbase и обработчик задач, который может быть запущен в нескольких
 экземплярах на разных устройствах для ускорения вычислений. В данном примере представлена обработка видео
-с помощью ffmpeg для создания кружочков в телеграме. При этом не требудется большая мощность, поэтому
+с помощью ffmpeg для создания кружочков в телеграме. При этом не требуется большая мощность, поэтому
 возможость горизонтального масштабирования не играет роли. Играет роль улучшеная модель контроля задач,
 отслеживания ошибок, которые сохраняются в базе данных с графическим интерфейсом. Задачи можно перезапускать,
 и они не сбрасываются при перезапуске бота.
@@ -21,9 +21,7 @@ cp example.env .env
 vim .env
 ```
 
-Запустим pocketbase, удалим существующую коллекцию users, затем перейдем во вкладку
-settings / import collections. Далее в меню load from json выбираем [файл](https://github.com/soaska/faceswaper/blob/main/pocketbase/collections/PB%20Schema.json)
-`pocketbase/collections/PB Schema.json`
+Запустим pocketbase, перейдем по её [url](http://0.0.0.0:8080/_/), создадим пользователя.
 ```shell
 podman compose up pocketbase
 ```
@@ -34,9 +32,9 @@ podman compose up -d --build
 ```
 
 # Запуск
-Запустим pocketbase по [этой](https://pocketbase.io/docs/) инструкции.
-Зайдем во вкладку settings / import collections. Далее в меню load from json выбираем [файл](https://github.com/soaska/faceswaper/blob/main/pocketbase/collections/PB%20Schema.json)
-pocketbase/collections/PB Schema.json
+Запустим pocketbase по [этой](https://pocketbase.io/docs/) инструкции. Удалим collection `users`.
+Зайдем во вкладку *settings / import* collections. Далее в меню *load from json* выбираем [файл](https://github.com/soaska/faceswaper/blob/main/pocketbase/collections/PB%20Schema.json)
+`pocketbase/collections/PB Schema.json`
 
 Скопируем код
 ```shell

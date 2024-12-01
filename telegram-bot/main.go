@@ -15,7 +15,7 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 
 	userData, err := getUserInfo(tgUserID)
 	if err != nil {
-		return fmt.Errorf("Ошибка при получении данных о пользователе: %v", err)
+		return fmt.Errorf("ошибка при получении данных о пользователе: %v", err)
 	}
 
 	response := fmt.Sprintf(
@@ -34,7 +34,7 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 
 	activeJobs, err := getActiveJobs(userData["id"].(string), "face_jobs")
 	if err != nil {
-		return fmt.Errorf("Ошибка при получении активных задач: %v", err)
+		return fmt.Errorf("ошибка при получении активных задач: %v", err)
 	}
 	if len(activeJobs) > 0 {
 		response += "📋 Активные задачи замены лиц:\n"
@@ -56,7 +56,7 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 
 	activeJobs, err = getActiveJobs(userData["id"].(string), "circle_jobs")
 	if err != nil {
-		return fmt.Errorf("Ошибка при получении активных задач: %v", err)
+		return fmt.Errorf("ошибка при получении активных задач: %v", err)
 	}
 	if len(activeJobs) > 0 {
 		response += "📋 Активные задачи создания кружков:\n"
@@ -151,7 +151,7 @@ func main() {
 
 		// help
 		if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "help") {
-			helpMessage := "Напиши мне фото для выполнения задачи по замене лица. Пришли видео для создания кружочка."
+			helpMessage := "Напиши мне фото для создания задачи по замене лица (временно недоступно). Пришли видео для создания кружочка. Канал с новостями https://t.me/+HGQVwMhFzIExZDNi"
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, helpMessage)
 			bot.Send(msg)
 			continue
@@ -189,12 +189,15 @@ func main() {
 		if update.Message.Video != nil {
 			videoFileID := update.Message.Video.FileID
 
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ловлю!")
+			bot.Send(msg)
+
 			// Проверяем, есть ли фото в сессии пользователя
 			if session.FaceFileID != "" {
-				err, jobID := createFaceJob(bot, pbUserID, videoFileID, session.FaceFileID)
+				jobID, err := createFaceJob(bot, pbUserID, videoFileID, session.FaceFileID)
 				if err != nil {
 					log.Printf("Не удалось создать задание на замену лица: %v", err)
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Произошла ошибка при создании задания: %v", err))
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
 					bot.Send(msg)
 					continue
 				}
@@ -206,10 +209,10 @@ func main() {
 				session.FaceFileID = ""
 				continue
 			} else {
-				err, jobID := createCircleJob(bot, pbUserID, videoFileID)
+				jobID, err := createCircleJob(bot, pbUserID, videoFileID)
 				if err != nil {
 					log.Printf("Не удалось создать задание на создание кружочка: %v", err)
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Произошла ошибка при создании задания: %v", err))
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
 					bot.Send(msg)
 					continue
 				}
