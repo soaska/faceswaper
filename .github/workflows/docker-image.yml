@@ -13,10 +13,12 @@ jobs:
   build-job-manager:
     runs-on: ubuntu-latest
     steps:
+    - uses: actions/checkout@v4
     - name: Build the job-manager Docker image
       run: docker build ./job-manager -t job-manager:$(date +%s)
   build-pocketbase:
     runs-on: ubuntu-latest
     steps:
+    - uses: actions/checkout@v4
     - name: Build the pocketbase Docker image with migrations
       run: docker build ./pocketbase -t pocketbase:$(date +%s)

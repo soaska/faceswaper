@@ -46,7 +46,7 @@ func processCircleJobs() {
 		err = processTask(task)
 		if err != nil {
 			log.Printf("Ошибка обработки задачи %s: %v", task.ID, err)
-			updateTaskStatus(task.ID, fmt.Sprintf("error: %v", err)[:min(len(fmt.Sprintf("error: %v", err)), 255)])
+			updateTaskStatus(task.ID, fmt.Sprintf("error. time: %v", time.Now()))
 			continue
 		}
 
@@ -71,13 +71,13 @@ func processCircleJobs() {
 // Обработка задачи
 func processTask(task *Task) error {
 	if task.InputMedia == "" {
-		return fmt.Errorf("Задача с ID %s не содержит ссылки на input_media", task.ID)
+		return fmt.Errorf("задача с ID %s не содержит ссылки на input_media", task.ID)
 	}
 
 	cacheDir := "cache"
 	err := os.MkdirAll(cacheDir, os.ModePerm)
 	if err != nil {
-		return fmt.Errorf("Ошибка создания кэша: %v", err)
+		return fmt.Errorf("ошибка создания кэша: %v", err)
 	}
 
 	inputFilePath := filepath.Join(cacheDir, fmt.Sprintf("%s_input.mp4", task.ID))
@@ -86,17 +86,17 @@ func processTask(task *Task) error {
 
 	err = downloadFile(mediaUrl, inputFilePath)
 	if err != nil {
-		return fmt.Errorf("Ошибка скачивания файла: %v", err)
+		return fmt.Errorf("ошибка скачивания файла: %v", err)
 	}
 
 	err = processVideo(inputFilePath, outputFilePath)
 	if err != nil {
-		return fmt.Errorf("Ошибка обработки видео: %v", err)
+		return fmt.Errorf("ошибка обработки видео: %v", err)
 	}
 
 	err = uploadOutputMedia(task.ID, outputFilePath)
 	if err != nil {
-		return fmt.Errorf("Ошибка загрузки кружка в бд: %v", err)
+		return fmt.Errorf("ошибка загрузки кружка в бд: %v", err)
 	}
 
 	return nil
@@ -106,19 +106,19 @@ func processTask(task *Task) error {
 func downloadFile(url, destination string) error {
 	resp, err := http.Get(url)
 	if err != nil {
-		return fmt.Errorf("Ошибка скачивания: %v", err)
+		return fmt.Errorf("ошибка скачивания: %v", err)
 	}
 	defer resp.Body.Close()
 
 	file, err := os.Create(destination)
 	if err != nil {
-		return fmt.Errorf("Ошибка создания файла: %v", err)
+		return fmt.Errorf("ошибка создания файла: %v", err)
 	}
 	defer file.Close()
 
 	_, err = io.Copy(file, resp.Body)
 	if err != nil {
-		return fmt.Errorf("Ошибка сохранения файла: %v", err)
+		return fmt.Errorf("ошибка сохранения файла: %v", err)
 	}
 
 	return nil
@@ -140,7 +140,7 @@ func processVideo(inputPath, outputPath string) error {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("Ошибка ffmpeg: %v, вывод: %s", err, string(output))
+		return fmt.Errorf("ошибка ffmpeg: %v, вывод: %s", err, string(output))
 	}
 
 	return nil
@@ -149,29 +149,29 @@ func processVideo(inputPath, outputPath string) error {
 // Отправка готового видеосообщения владельцу через Telegram API
 func notifyOwner(task *Task) error {
 	if task.Owner == "" {
-		return fmt.Errorf("Задача с ID %s не содержит корректного owner", task.ID)
+		return fmt.Errorf("задача с ID %s не содержит корректного owner", task.ID)
 	}
 
 	ownerTGID, err := getOwnerTGID(task.Owner)
 	if err != nil {
-		return fmt.Errorf("Ошибка получения Telegram ID владельца задачи %s: %v", task.ID, err)
+		return fmt.Errorf("ошибка получения Telegram ID владельца задачи %s: %v", task.ID, err)
 	}
 
 	outputFilePath := filepath.Join("cache", fmt.Sprintf("%s_output.mp4", task.ID))
 	if _, err := os.Stat(outputFilePath); err != nil {
-		return fmt.Errorf("Файл для отправки не найден: %v", err)
+		return fmt.Errorf("файл для отправки не найден: %v", err)
 	}
 
 	file, err := os.Open(outputFilePath)
 	if err != nil {
-		return fmt.Errorf("Ошибка открытия файла: %v", err)
+		return fmt.Errorf("ошибка открытия файла: %v", err)
 	}
 	defer file.Close()
 
 	var fileBuffer bytes.Buffer
 	_, err = io.Copy(&fileBuffer, file)
 	if err != nil {
-		return fmt.Errorf("Ошибка чтения содержимого файла: %v", err)
+		return fmt.Errorf("ошибка чтения содержимого файла: %v", err)
 	}
 
 	body := &bytes.Buffer{}
@@ -179,28 +179,28 @@ func notifyOwner(task *Task) error {
 
 	err = writer.WriteField("chat_id", ownerTGID)
 	if err != nil {
-		return fmt.Errorf("Ошибка добавления поля chat_id: %v", err)
+		return fmt.Errorf("ошибка добавления поля chat_id: %v", err)
 	}
 
 	filePart, err := writer.CreateFormFile("video_note", filepath.Base(outputFilePath))
 	if err != nil {
-		return fmt.Errorf("Ошибка добавления файла в запрос: %v", err)
+		return fmt.Errorf("ошибка добавления файла в запрос: %v", err)
 	}
 	_, err = fileBuffer.WriteTo(filePart)
 	if err != nil {
-		return fmt.Errorf("Ошибка записи видео в multipart форму: %v", err)
+		return fmt.Errorf("ошибка записи видео в multipart форму: %v", err)
 	}
 
 	err = writer.Close()
 	if err != nil {
-		return fmt.Errorf("Ошибка закрытия записи multipart данных: %v", err)
+		return fmt.Errorf("ошибка закрытия записи multipart данных: %v", err)
 	}
 
 	url := fmt.Sprintf("%s/bot%s/sendVideoNote", BOT_ENDPOINT, os.Getenv("TELEGRAM_APITOKEN"))
 
 	req, err := http.NewRequest("POST", url, body)
 	if err != nil {
-		return fmt.Errorf("Ошибка создания HTTP-запроса: %v", err)
+		return fmt.Errorf("ошибка создания HTTP-запроса: %v", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
@@ -208,17 +208,17 @@ func notifyOwner(task *Task) error {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("Ошибка отправки запроса Telegram API: %v", err)
+		return fmt.Errorf("ошибка отправки запроса Telegram API: %v", err)
 	}
 	defer resp.Body.Close()
 
 	// Проверяем ответ от Telegram API
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("Ошибка чтения ответа Telegram API: %v", err)
+		return fmt.Errorf("ошибка чтения ответа Telegram API: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("Ошибка в Telegram API. Код %d: %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("ошибка в Telegram API. Код %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	log.Printf("Видеосообщение отправлено владельцу задачи %s (Telegram ID: %s).", task.ID, ownerTGID)
@@ -226,11 +226,11 @@ func notifyOwner(task *Task) error {
 	// Увеличиваем счетчик кружков (circle_count) для владельца
 	tgid, err := strconv.Atoi(ownerTGID)
 	if err != nil {
-		return fmt.Errorf("Ошибка преобразования telegram id в int: %s", err)
+		return fmt.Errorf("ошибка преобразования telegram id в int: %s", err)
 	}
 	err = incrementCircleCount(tgid)
 	if err != nil {
-		log.Printf("Ошибка обновления circle_count для владельца задачи %s: %v", task.ID, err)
+		return fmt.Errorf("ошибка обновления circle_count для владельца задачи %s: %v", task.ID, err)
 	}
 
 	return nil

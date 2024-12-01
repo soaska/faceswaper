@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -46,39 +47,41 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 	return body, nil
 }
 
-func downloadTelegramFile(bot *tgbotapi.BotAPI, fileID, destinationPath string) error {
-	file, err := bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
-	if err != nil {
-		return fmt.Errorf("не удалось получить файл по ID: %v", err)
-	}
+type FileResponse struct {
+	Ok     bool                   `json:"ok"`
+	Result map[string]interface{} `json:"result"`
+}
 
-	fileURL := fmt.Sprintf("%s/file/bot%s/%s", api_endpint, bot.Token, file.FilePath)
-	log.Println(fileURL)
-
-	// Download request
-	resp, err := http.Get(fileURL)
+func getTelegramFile(bot *tgbotapi.BotAPI, fileID string) (string, error) {
+	//file, err := bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
+	CallUrl := fmt.Sprintf("%s/bot%s/getFile?file_id=%s", api_endpint, bot.Token, fileID)
+	resp, err := http.Get(CallUrl)
 	if err != nil {
-		return fmt.Errorf("не удалось скачать файл: %v", err)
+		return "", fmt.Errorf("ошибка http запроса: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("не удалось скачать файл, статус: %s", resp.Status)
-	}
-
-	// Save on disk
-	out, err := os.Create(destinationPath)
+	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("не удалось создать файл: %v", err)
+		return "", fmt.Errorf("ошибка чтения ответа сервера: %v", err)
 	}
-	defer out.Close()
 
-	_, err = io.Copy(out, resp.Body)
+	fileResponse := &FileResponse{}
+	err = json.Unmarshal(responseBody, fileResponse)
 	if err != nil {
-		return fmt.Errorf("не удалось сохранить содержимое файла: %v", err)
+		return "", fmt.Errorf("ошибка расшифровки ответа JSON: %v", err)
 	}
 
-	return nil
+	if fileResponse.Ok {
+		filePath, ok := fileResponse.Result["file_path"]
+		if !ok || filePath == "" {
+			return "", fmt.Errorf("не найден путь в ответе сервера")
+		}
+		//serverPath := fmt.Sprintf("/storage/%s/%s", bot.Token, filePath.(string))
+		return filePath.(string), nil
+	} else {
+		return "", fmt.Errorf("ошибка получения пути: %v", resp.StatusCode)
+	}
 }
 
 // loading env variables from .env or system environment

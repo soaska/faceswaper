@@ -6,6 +6,8 @@ services:
   telegram-bot-api:
     image: aiogram/telegram-bot-api:latest
     hostname: tgapi
+    environment:
+      - TELEGRAM_LOCAL=1
     env_file:
       - .env
     volumes:
@@ -38,6 +40,8 @@ services:
       - DOCKER_BUILD=yas
     env_file:
       - .env
+    volumes:
+      - ./data/telegram-bot-api:/var/lib/telegram-bot-api
     restart: unless-stopped
     depends_on:
       - pocketbase
@@ -51,6 +55,8 @@ services:
       - DOCKER_BUILD=yas
     env_file:
       - .env
+    volumes:
+      - ./data/telegram-bot-api:/var/lib/telegram-bot-api
     restart: unless-stopped
     depends_on:
       - pocketbase

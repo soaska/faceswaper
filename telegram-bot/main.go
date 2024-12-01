@@ -151,7 +151,7 @@ func main() {
 
 		// help
 		if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "help") {
-			helpMessage := "Напиши мне фото для создания задачи по замене лица (временно недоступно). Пришли видео для создания кружочка."
+			helpMessage := "Напиши мне фото для создания задачи по замене лица (временно недоступно). Пришли видео для создания кружочка. Канал с новостями https://t.me/+HGQVwMhFzIExZDNi"
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, helpMessage)
 			bot.Send(msg)
 			continue
@@ -188,6 +188,7 @@ func main() {
 		// Обработка получения видео
 		if update.Message.Video != nil {
 			videoFileID := update.Message.Video.FileID
+
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ловлю!")
 			bot.Send(msg)
 
@@ -196,7 +197,7 @@ func main() {
 				jobID, err := createFaceJob(bot, pbUserID, videoFileID, session.FaceFileID)
 				if err != nil {
 					log.Printf("Не удалось создать задание на замену лица: %v", err)
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Произошла ошибка при создании задания: %v", err))
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
 					bot.Send(msg)
 					continue
 				}
@@ -211,7 +212,7 @@ func main() {
 				jobID, err := createCircleJob(bot, pbUserID, videoFileID)
 				if err != nil {
 					log.Printf("Не удалось создать задание на создание кружочка: %v", err)
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Произошла ошибка при создании задания: %v", err))
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
 					bot.Send(msg)
 					continue
 				}

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 
-	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 	"github.com/joho/godotenv"
 )
 
@@ -47,40 +46,6 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 	}
 
 	return body, nil
-}
-
-func downloadTelegramFile(bot *tgbotapi.BotAPI, fileID, destinationPath string) error {
-	file, err := bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
-	if err != nil {
-		return fmt.Errorf("не удалось получить файл по ID: %v", err)
-	}
-
-	fileURL := fmt.Sprintf("https://api.telegram.org/file/bot%s/%s", bot.Token, file.FilePath)
-
-	// Download request
-	resp, err := http.Get(fileURL)
-	if err != nil {
-		return fmt.Errorf("не удалось скачать файл: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("не удалось скачать файл, статус: %s", resp.Status)
-	}
-
-	// Save on disk
-	out, err := os.Create(destinationPath)
-	if err != nil {
-		return fmt.Errorf("не удалось создать файл: %v", err)
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
-		return fmt.Errorf("не удалось сохранить содержимое файла: %v", err)
-	}
-
-	return nil
 }
 
 // loading env variables from .env or system environment

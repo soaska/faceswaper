@@ -109,22 +109,13 @@ func getOrCreateUser(tgUserID int, tgUsername string) (string, error) {
 
 // Face replacement job creation
 func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFileID string) (string, error) {
-	// file dir creation
-	userDir := fmt.Sprintf("data/%s", userID)
-	err := os.MkdirAll(userDir, os.ModePerm)
-	if err != nil {
-		return "", fmt.Errorf("не удалось создать директорию пользователя: %v", err)
-	}
-
 	// file download
-	inputMediaPath := fmt.Sprintf("%s/%s.mp4", userDir, inputMediaFileID)
-	err = downloadTelegramFile(bot, inputMediaFileID, inputMediaPath)
+	inputMediaPath, err := getTelegramFile(bot, inputMediaFileID)
 	if err != nil {
 		return "", fmt.Errorf("не удалось скачать видеофайл: %v", err)
 	}
 
-	inputFacePath := fmt.Sprintf("%s/%s.jpeg", userDir, inputFaceFileID)
-	err = downloadTelegramFile(bot, inputFaceFileID, inputFacePath)
+	inputFacePath, err := getTelegramFile(bot, inputFaceFileID)
 	if err != nil {
 		return "", fmt.Errorf("не удалось скачать файл лица: %v", err)
 	}
@@ -148,16 +139,16 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 	if err != nil {
 		return "", fmt.Errorf("не удалось получить информацию о видеофайле: %v", err)
 	}
-	if fileInfo.Size() > 50*1024*1024 {
-		return "", fmt.Errorf("размер видео превышает 50 МБ")
+	if fileInfo.Size() > 500*1024*1024 {
+		return "", fmt.Errorf("размер видео превышает 500 МБ")
 	}
 
 	faceFileInfo, err := inputFaceFile.Stat()
 	if err != nil {
 		return "", fmt.Errorf("не удалось получить информацию о файле лица: %v", err)
 	}
-	if faceFileInfo.Size() > 50*1024*1024 {
-		return "", fmt.Errorf("размер файла лица превышает 50 МБ")
+	if faceFileInfo.Size() > 500*1024*1024 {
+		return "", fmt.Errorf("размер файла лица превышает 500 МБ")
 	}
 
 	// body for multipart/form-data
@@ -233,16 +224,8 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 
 // Функция для создания Circle Job
 func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID string) (string, error) {
-	// file dir creation
-	userDir := fmt.Sprintf("data/%s", userID)
-	err := os.MkdirAll(userDir, os.ModePerm)
-	if err != nil {
-		return "", fmt.Errorf("не удалось создать директорию пользователя: %v", err)
-	}
-
 	// file download
-	inputMediaPath := fmt.Sprintf("%s/%s.mp4", userDir, inputMediaFileID)
-	err = downloadTelegramFile(bot, inputMediaFileID, inputMediaPath)
+	inputMediaPath, err := getTelegramFile(bot, inputMediaFileID)
 	if err != nil {
 		return "", fmt.Errorf("не удалось скачать видеофайл: %v", err)
 	}
@@ -260,8 +243,8 @@ func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID string) (str
 	if err != nil {
 		return "", fmt.Errorf("не удалось получить информацию о видеофайле: %v", err)
 	}
-	if fileInfo.Size() > 50*1024*1024 {
-		return "", fmt.Errorf("размер видео превышает 50 МБ")
+	if fileInfo.Size() > 500*1024*1024 {
+		return "", fmt.Errorf("размер видео превышает 500 МБ")
 	}
 
 	// Создаем body для multipart/form-data
