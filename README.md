@@ -75,3 +75,5 @@ go run .
 могут быть удалены в период неактивности программы. job-manager требует ffmpeg.
 
 По вопросам пишите в [issues](https://github.com/soaska/faceswaper/issues) или на почту soaska@cornspace.su.
+
+[License](license): MPL-2.0
