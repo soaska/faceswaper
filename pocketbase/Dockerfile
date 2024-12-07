@@ -1,4 +1,7 @@
 FROM alpine:latest
+LABEL org.opencontainers.image.source=https://github.com/soaska/faceswaper
+LABEL org.opencontainers.image.description="PocketBase container image with project-specific migrations"
+LABEL org.opencontainers.image.licenses=MPL-2.0
 
 ARG PB_VERSION=0.22.27
 

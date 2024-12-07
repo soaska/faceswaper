@@ -40,8 +40,6 @@ services:
       - DOCKER_BUILD=yas
     env_file:
       - .env
-    volumes:
-      - ./data/telegram-bot-api:/var/lib/telegram-bot-api
     restart: unless-stopped
     depends_on:
       - pocketbase
