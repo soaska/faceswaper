@@ -9,16 +9,38 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build the telegram-bot Docker image
-      run: docker build ./telegram-bot -t telegram-bot:$(date +%s)
+      run: docker build ./telegram-bot -t ${{ env.REGISTRY }}/${{ github.actor }}/telegram-bot:push-artifact
+    - uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.TOKEN }}
+    - name: Push the telegram-bot Docker image
+      run: docker push ${{ env.REGISTRY }}/${{ github.actor }}/telegram-bot:push-artifact
+
   build-job-manager:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: Build the job-manager Docker image
-      run: docker build ./job-manager -t job-manager:$(date +%s)
+      run: docker build ./job-manager -t ${{ env.REGISTRY }}/${{ github.actor }}/job-manager:push-artifact
+    - uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.TOKEN }}
+    - name: Push the job-manager Docker image
+      run: docker push ${{ env.REGISTRY }}/${{ github.actor }}/job-manager:push-artifact
   build-pocketbase:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
     - name: Build the pocketbase Docker image with migrations
-      run: docker build ./pocketbase -t pocketbase:$(date +%s)
+      run: docker build ./pocketbase -t ${{ env.REGISTRY }}/${{ github.actor }}/pocketbase:push-artifact
+    - uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.TOKEN }}
+    - name: Push the pocketbase Docker image with migrations
+      run: docker push ${{ env.REGISTRY }}/${{ github.actor }}/pocketbase:push-artifact
