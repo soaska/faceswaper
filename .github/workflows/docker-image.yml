@@ -9,7 +9,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build the telegram-bot Docker image
-      run: docker build ./telegram-bot -t ${{ secrets.REGISTRY }}/${{ github.actor }}/telegram-bot:push-artifact
+      run: docker build ./telegram-bot -t ${{ secrets.REGISTRY }}/${{ github.actor }}/telegram-bot:push-artifact --provenance=false
     - uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
       with:
         registry: ${{ secrets.REGISTRY }}
@@ -23,7 +23,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build the job-manager Docker image
-      run: docker build ./job-manager -t ${{ secrets.REGISTRY }}/${{ github.actor }}/job-manager:push-artifact
+      run: docker build ./job-manager -t ${{ secrets.REGISTRY }}/${{ github.actor }}/job-manager:push-artifact --provenance=false
     - uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
       with:
         registry: ${{ secrets.REGISTRY }}
@@ -36,7 +36,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build the pocketbase Docker image with migrations
-      run: docker build ./pocketbase -t ${{ secrets.REGISTRY }}/${{ github.actor }}/pocketbase:push-artifact
+      run: docker build ./pocketbase -t ${{ secrets.REGISTRY }}/${{ github.actor }}/pocketbase:push-artifact --provenance=false
     - uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
       with:
         registry: ${{ secrets.REGISTRY }}
