@@ -5,29 +5,28 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
-
-	"mime/multipart"
 )
 
 // Task - структура для хранения данных задачи
 type Task struct {
 	ID          string `json:"id"`
 	Owner       string `json:"owner"`
-	InputMedia  string `json:"input_media"`
+	InputMedia  string `json:"input_media"` // видео
+	SourceImage string `json:"input_face"`  // фото для замены лица
 	OutputMedia string `json:"output_media"`
 	Status      string `json:"status"`
 }
 
-// Основная функция обработки задачи
+// Основной цикл обработки задач создания кружков
 func processCircleJobs() {
 	for {
-		task, err := fetchQueuedCircleJob("circle_jobs")
+		task, err := fetchQueuedJobs("circle_jobs")
 		if err != nil {
 			log.Printf("Ошибка при получении задачи: %v", err)
 			continue
@@ -37,30 +36,30 @@ func processCircleJobs() {
 			continue
 		}
 
-		err = updateTaskStatus(task.ID, "processing")
+		err = updateStatus("circle_jobs", task.ID, "processing")
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'processing' для задачи %s: %v", task.ID, err)
 			continue
 		}
 
-		err = processTask(task)
+		err = processCircleTask(task)
 		if err != nil {
 			log.Printf("Ошибка обработки задачи %s: %v", task.ID, err)
-			updateTaskStatus(task.ID, fmt.Sprintf("error. time: %v", time.Now()))
+			updateStatus("circle_jobs", task.ID, fmt.Sprintf("error. time: %v", time.Now()))
 			continue
 		}
 
-		err = updateTaskStatus(task.ID, "sending")
+		err = updateStatus("circle_jobs", task.ID, "sending")
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'sending' для задачи %s: %v", task.ID, err)
 		}
 
-		err = notifyOwner(task)
+		err = notifyCircleOwner(task)
 		if err != nil {
 			log.Printf("Ошибка отправки для задачи %s: %v", task.ID, err)
 		}
 
-		err = updateTaskStatus(task.ID, "completed")
+		err = updateStatus("circle_jobs", task.ID, "completed")
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'completed' для задачи %s: %v", task.ID, err)
 		}
@@ -68,86 +67,43 @@ func processCircleJobs() {
 	}
 }
 
-// Обработка задачи
-func processTask(task *Task) error {
-	if task.InputMedia == "" {
-		return fmt.Errorf("задача с ID %s не содержит ссылки на input_media", task.ID)
+// processFaceSwapJobs основной цикл обработки задач замены лиц
+func processFaceSwapJobs() {
+	for {
+		task, err := fetchQueuedJobs("face_jobs")
+		if err != nil {
+			log.Printf("Ошибка при получении задачи замены лиц: %v", err)
+			continue
+		}
+		if task == nil {
+			wait()
+			continue
+		}
+
+		err = updateStatus("face_jobs", task.ID, "processing")
+		if err != nil {
+			log.Printf("Ошибка смены статуса на 'processing' для задачи %s: %v", task.ID, err)
+			continue
+		}
+
+		err = processFaceSwapTask(task)
+		if err != nil {
+			log.Printf("Ошибка обработки задачи замены лиц %s: %v", task.ID, err)
+			updateStatus("face_jobs", task.ID, fmt.Sprintf("error. time: %v", time.Now()))
+			continue
+		}
+
+		err = updateStatus("face_jobs", task.ID, "completed")
+		if err != nil {
+			log.Printf("Ошибка смены статуса на 'completed' для задачи %s: %v", task.ID, err)
+		}
+
+		log.Printf("Задача замены лиц %s успешно обработана", task.ID)
 	}
-
-	cacheDir := "cache"
-	err := os.MkdirAll(cacheDir, os.ModePerm)
-	if err != nil {
-		return fmt.Errorf("ошибка создания кэша: %v", err)
-	}
-
-	inputFilePath := filepath.Join(cacheDir, fmt.Sprintf("%s_input.mp4", task.ID))
-	outputFilePath := filepath.Join(cacheDir, fmt.Sprintf("%s_output.mp4", task.ID))
-	mediaUrl := fmt.Sprintf("%s/api/files/circle_jobs/%s/%s", pocketBaseUrl, task.ID, task.InputMedia)
-
-	err = downloadFile(mediaUrl, inputFilePath)
-	if err != nil {
-		return fmt.Errorf("ошибка скачивания файла: %v", err)
-	}
-
-	err = processVideo(inputFilePath, outputFilePath)
-	if err != nil {
-		return fmt.Errorf("ошибка обработки видео: %v", err)
-	}
-
-	err = uploadOutputMedia(task.ID, outputFilePath)
-	if err != nil {
-		return fmt.Errorf("ошибка загрузки кружка в бд: %v", err)
-	}
-
-	return nil
 }
 
-// Скачивание файла
-func downloadFile(url, destination string) error {
-	resp, err := http.Get(url)
-	if err != nil {
-		return fmt.Errorf("ошибка скачивания: %v", err)
-	}
-	defer resp.Body.Close()
-
-	file, err := os.Create(destination)
-	if err != nil {
-		return fmt.Errorf("ошибка создания файла: %v", err)
-	}
-	defer file.Close()
-
-	_, err = io.Copy(file, resp.Body)
-	if err != nil {
-		return fmt.Errorf("ошибка сохранения файла: %v", err)
-	}
-
-	return nil
-}
-
-// Обработка файла
-func processVideo(inputPath, outputPath string) error {
-	cmd := exec.Command(
-		"ffmpeg",
-		"-i", inputPath,
-		"-vf", "crop=min(iw\\,ih):min(iw\\,ih):(iw-min(iw\\,ih))/2:(ih-min(iw\\,ih))/2,scale=512:512",
-		"-r", "30",
-		"-t", "60",
-		"-c:v", "libx264",
-		"-preset", "fast",
-		"-crf", "23",
-		outputPath,
-	)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("ошибка ffmpeg: %v, вывод: %s", err, string(output))
-	}
-
-	return nil
-}
-
-// Отправка готового видеосообщения владельцу через Telegram API
-func notifyOwner(task *Task) error {
+// Отправка готового видеосообщения владельцу через Telegram API и обновление баланса
+func notifyCircleOwner(task *Task) error {
 	if task.Owner == "" {
 		return fmt.Errorf("задача с ID %s не содержит корректного owner", task.ID)
 	}
@@ -241,12 +197,15 @@ func wait() {
 }
 
 func main() {
-	BOT_TOKEN, _, BOT_ENDPOINT = LoadEnvironment()
+	BOT_TOKEN, _, BOT_ENDPOINT, FACEFUSION_URL = LoadEnvironment()
 
 	err := authenticatePocketBase()
 	if err != nil {
 		log.Fatalf("Ошибка аутентификации: %v", err)
 	}
 
-	processCircleJobs()
+	go processCircleJobs()
+	go processFaceSwapJobs()
+
+	select {}
 }

@@ -21,6 +21,9 @@ var authToken string
 var BOT_TOKEN string
 var BOT_ENDPOINT string
 
+// facefusion
+var FACEFUSION_URL string
+
 // just for sending search requests to pocketbase
 func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 	client := &http.Client{}
@@ -49,7 +52,7 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 }
 
 // loading env variables from .env or system environment
-func LoadEnvironment() (string, bool, string) {
+func LoadEnvironment() (string, bool, string, string) {
 	if os.Getenv("DOCKER_BUILD") == `` {
 		err := godotenv.Load()
 		if err != nil {
@@ -92,5 +95,33 @@ func LoadEnvironment() (string, bool, string) {
 		log.Fatal("empty pocketbase password loaded. env is not correct or configuration is insecure")
 	}
 
-	return bot_token, bot_debug, bot_endpoint
+	// FaceFusion
+	faceFusionUrl := os.Getenv("FACEFUSION_URL")
+	if faceFusionUrl == "" {
+		log.Fatalf("переменная окружения FACEFUSION_URL не установлена")
+	}
+
+	return bot_token, bot_debug, bot_endpoint, faceFusionUrl
+}
+
+// Скачивание файла
+func downloadFile(url, destination string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("ошибка скачивания: %v", err)
+	}
+	defer resp.Body.Close()
+
+	file, err := os.Create(destination)
+	if err != nil {
+		return fmt.Errorf("ошибка создания файла: %v", err)
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, resp.Body)
+	if err != nil {
+		return fmt.Errorf("ошибка сохранения файла: %v", err)
+	}
+
+	return nil
 }

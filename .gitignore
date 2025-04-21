@@ -32,3 +32,5 @@ notes.txt
 cache
 docker-compose.yaml
 pb_data
+venv
+.venv

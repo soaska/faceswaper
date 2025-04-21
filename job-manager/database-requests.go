@@ -190,7 +190,7 @@ func getOwnerTGID(ownerID string) (string, error) {
 }
 
 // Получение задачи в статусе "queued"
-func fetchQueuedCircleJob(collection string) (*Task, error) {
+func fetchQueuedJobs(collection string) (*Task, error) {
 	filter := "status='queued'"
 	url := fmt.Sprintf("%s/api/collections/%s/records?filter=%s&perPage=1", pocketBaseUrl, collection, filter)
 
@@ -216,8 +216,8 @@ func fetchQueuedCircleJob(collection string) (*Task, error) {
 }
 
 // Обновление статуса задачи
-func updateTaskStatus(taskID, status string) error {
-	url := fmt.Sprintf("%s/api/collections/circle_jobs/records/%s", pocketBaseUrl, taskID)
+func updateStatus(collection, taskID, status string) error {
+	url := fmt.Sprintf("%s/api/collections/%s/records/%s", pocketBaseUrl, collection, taskID)
 
 	data := map[string]string{
 		"status": status,
