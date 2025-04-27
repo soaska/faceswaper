@@ -2,44 +2,91 @@ name: If it builds, it probably works.
 
 on:
   push:
+    branches: [ master, main, '**' ]
   pull_request:
+    branches: [ master, main ]
+
 jobs:
   build-telegram-bot:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
     - name: Build the telegram-bot Docker image
-      run: docker build ./telegram-bot -t ${{ secrets.REGISTRY }}/${{ github.actor }}/telegram-bot:push-artifact --provenance=false
-    - uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+      run: |
+        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          docker build ./telegram-bot -t ${{ secrets.REGISTRY }}/${{ github.actor }}/telegram-bot:latest --provenance=false
+        else
+          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
+          docker build ./telegram-bot -t ${{ secrets.REGISTRY }}/${{ github.actor }}/telegram-bot:$BRANCH_NAME --provenance=false
+        fi
+    - uses: docker/login-action@v3
       with:
         registry: ${{ secrets.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.TOKEN }}
     - name: Push the telegram-bot Docker image
-      run: docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/telegram-bot:push-artifact
+      run: |
+        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/telegram-bot:latest
+        else
+          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
+          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/telegram-bot:$BRANCH_NAME
+        fi
+
   build-job-manager:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
     - name: Build the job-manager Docker image
-      run: docker build ./job-manager -t ${{ secrets.REGISTRY }}/${{ github.actor }}/job-manager:push-artifact --provenance=false
-    - uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+      run: |
+        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          docker build ./job-manager -t ${{ secrets.REGISTRY }}/${{ github.actor }}/job-manager:latest --provenance=false
+        else
+          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
+          docker build ./job-manager -t ${{ secrets.REGISTRY }}/${{ github.actor }}/job-manager:$BRANCH_NAME --provenance=false
+        fi
+    - uses: docker/login-action@v3
       with:
         registry: ${{ secrets.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.TOKEN }}
     - name: Push the job-manager Docker image
-      run: docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/job-manager:push-artifact
+      run: |
+        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/job-manager:latest
+        else
+          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
+          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/job-manager:$BRANCH_NAME
+        fi
+
   build-pocketbase:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    - name: Build the pocketbase Docker image with migrations
-      run: docker build ./pocketbase -t ${{ secrets.REGISTRY }}/${{ github.actor }}/pocketbase:push-artifact --provenance=false
-    - uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    - name: Build the pocketbase Docker image
+      run: |
+        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          docker build ./pocketbase -t ${{ secrets.REGISTRY }}/${{ github.actor }}/pocketbase:latest --provenance=false
+        else
+          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
+          docker build ./pocketbase -t ${{ secrets.REGISTRY }}/${{ github.actor }}/pocketbase:$BRANCH_NAME --provenance=false
+        fi
+    - uses: docker/login-action@v3
       with:
         registry: ${{ secrets.REGISTRY }}
         username: ${{ github.actor }}
         password: ${{ secrets.TOKEN }}
-    - name: Push the pocketbase Docker image with migrations
-      run: docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/pocketbase:push-artifact
+    - name: Push the pocketbase Docker image
+      run: |
+        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/pocketbase:latest
+        else
+          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
+          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/pocketbase:$BRANCH_NAME
+        fi

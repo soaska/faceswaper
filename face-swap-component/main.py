@@ -15,25 +15,20 @@ import requests
 import json
 import subprocess
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Face Swap API")
 
-# Создаем временную директорию для файлов
 TEMP_DIR = Path("temp")
 TEMP_DIR.mkdir(exist_ok=True)
 
-# Определяем тип устройства из переменных окружения
 DEVICE_TYPE = os.getenv("DEVICE_TYPE", "cpu").lower()
 if DEVICE_TYPE == "nvidia":
     providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
     ctx_id = 0
 elif DEVICE_TYPE == "apple":
-    # Для Apple Silicon используем CoreML как основной провайдер
     try:
-        # Проверяем доступность CoreML провайдера
         available_providers = onnxruntime.get_available_providers()
         logger.info(f"Available ONNX Runtime providers: {available_providers}")
         
@@ -48,12 +43,12 @@ elif DEVICE_TYPE == "apple":
         providers = ['CPUExecutionProvider']
     
     ctx_id = -1
-    # Включаем оптимизации для Apple Silicon
+    # Отимизации для Apple Silicon
     os.environ['OMP_NUM_THREADS'] = str(os.cpu_count())
     os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
-    # Включаем оптимизации OpenCV для Metal
+    # Оптимизации OpenCV для Metal
     os.environ['OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS'] = '1'
-    # Включаем оптимизации для Metal
+    # Оптимизации для Metal
     os.environ['METAL_DEVICE'] = '0'
     os.environ['METAL_DEVICE_TYPE'] = 'GPU'
     # Оптимизации ONNX Runtime для Apple Silicon
@@ -67,12 +62,11 @@ logger.info(f"Using device type: {DEVICE_TYPE}")
 logger.info(f"Selected providers: {providers}")
 logger.info(f"CPU cores: {os.cpu_count()}")
 
-# Инициализация моделей с оптимизированными настройками
 session_options = onnxruntime.SessionOptions()
 if DEVICE_TYPE == "apple":
-    # Включаем оптимизации графа для Apple Silicon
+    # Оптимизации графа для Apple Silicon
     session_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
-    # Включаем оптимизации памяти
+    # Оптимизации памяти
     session_options.enable_mem_pattern = True
     session_options.enable_mem_reuse = True
     # Устанавливаем количество потоков
@@ -82,7 +76,6 @@ if DEVICE_TYPE == "apple":
     session_options.log_severity_level = 0
     session_options.log_verbosity_level = 0
 
-# Инициализация моделей с оптимизированными настройками
 try:
     face_analyzer = FaceAnalysis(name='buffalo_l', providers=providers, session_options=session_options)
     face_analyzer.prepare(ctx_id=ctx_id, det_size=(640, 640))
@@ -91,7 +84,6 @@ except Exception as e:
     logger.error(f"Error initializing face analyzer: {e}")
     raise
 
-# Загрузка модели Sber Ghost 2.0 с оптимизированными настройками
 MODEL_PATH = os.path.join('models', 'inswapper_128.onnx')
 if not os.path.exists(MODEL_PATH):
     raise RuntimeError(f"Model not found at {MODEL_PATH}")
@@ -129,7 +121,6 @@ async def swap_faces(
 
         # Выполняем замену лиц
         try:
-            # Загружаем исходное изображение
             source_img = cv2.imread(str(source_path))
             if source_img is None:
                 raise HTTPException(
@@ -147,7 +138,6 @@ async def swap_faces(
                 )
             source_face = source_faces[0]
             
-            # Открываем видео
             target_vid = cv2.VideoCapture(str(target_path))
             if not target_vid.isOpened():
                 raise HTTPException(
@@ -155,7 +145,6 @@ async def swap_faces(
                     detail="Не удалось открыть видео"
                 )
             
-            # Получаем параметры видео
             width = int(target_vid.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(target_vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
             fps = target_vid.get(cv2.CAP_PROP_FPS)
