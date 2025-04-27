@@ -1,0 +1,13 @@
+services:
+  face-swap-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: base
+    environment:
+      - DEVICE_TYPE=cpu
+    restart: unless-stopped
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./data:/app/temp 

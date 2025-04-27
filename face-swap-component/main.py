@@ -151,11 +151,10 @@ async def swap_faces(
             
             logger.info(f"Video parameters: width={width}, height={height}, fps={fps}")
             
-            # Создаем VideoWriter для сохранения результата (без звука)
+            # VideoWriter для сохранения результата (без звука)
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(str(temp_output_path), fourcc, fps, (width, height))
             
-            # Обрабатываем каждый кадр
             frame_count = 0
             faces_found = False
             
@@ -203,17 +202,21 @@ async def swap_faces(
             
             # Добавляем звук из исходного видео
             try:
-                # Используем ffmpeg для добавления звука
+                # Используем ffmpeg для добавления звука и перекодирования видео
                 cmd = [
                     'ffmpeg',
                     '-i', str(temp_output_path),  # Видео без звука
                     '-i', str(target_path),       # Исходное видео со звуком
-                    '-c:v', 'copy',               # Копируем видео без перекодирования
-                    '-c:a', 'aac',                # Кодируем звук в AAC
-                    '-map', '0:v:0',              # Берем видео из первого файла
-                    '-map', '1:a:0',              # Берем звук из второго файла
-                    '-shortest',                  # Используем длительность самого короткого потока
-                    str(output_path)              # Выходной файл
+                    '-c:v', 'libx264',           # Используем H.264 кодек
+                    '-preset', 'medium',         # Баланс между качеством и скоростью
+                    '-crf', '23',                # Качество видео (0-51, меньше - лучше)
+                    '-c:a', 'aac',               # Кодируем звук в AAC
+                    '-b:a', '128k',              # Битрейт аудио
+                    '-map', '0:v:0',             # Берем видео из первого файла
+                    '-map', '1:a:0',             # Берем звук из второго файла
+                    '-movflags', '+faststart',   # Оптимизация для веб-воспроизведения
+                    '-shortest',                 # Используем длительность самого короткого потока
+                    str(output_path)             # Выходной файл
                 ]
                 
                 process = subprocess.Popen(
@@ -261,17 +264,18 @@ async def swap_faces(
                     detail="Выходной файл пуст"
                 )
             
-            # Читаем файл и возвращаем его содержимое
-            with open(output_path, "rb") as f:
-                video_content = f.read()
-            
-            # Очищаем выходной файл
-            os.remove(output_path)
-            
-            # Возвращаем видео в теле ответа
-            return Response(
-                content=video_content,
-                media_type="video/mp4"
+            # Возвращаем видео как файл с правильными заголовками
+            return FileResponse(
+                path=output_path,
+                media_type="video/mp4",
+                filename="face_swap.mp4",
+                background=None,  # Блокируем выполнение до завершения отправки
+                headers={
+                    "Content-Disposition": "attachment; filename=face_swap.mp4",
+                    "Content-Type": "video/mp4",
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": str(file_size)
+                }
             )
             
         except HTTPException as http_exc:

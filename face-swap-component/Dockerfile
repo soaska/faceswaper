@@ -34,7 +34,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt && \
+    pip3 install --no-cache-dir onnxruntime-gpu --extra-index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-11/pypi/simple/
 
 RUN mkdir -p models && \
     wget -O ./models/inswapper_128.onnx https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx && \
@@ -56,10 +57,21 @@ RUN apt-get update && apt-get install -y \
     wget \
     g++ \
     ffmpeg \
+    libomp-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Устанавливаем переменные окружения для оптимизации
+ENV OMP_NUM_THREADS=4
+ENV MKL_NUM_THREADS=4
+ENV OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS=1
+ENV METAL_DEVICE=0
+ENV METAL_DEVICE_TYPE=GPU
+ENV ORT_ENABLE_COREML=1
+ENV ORT_COREML_DEVICE=GPU
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir onnxruntime
 
 RUN mkdir -p models && \
     wget -O ./models/inswapper_128.onnx https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx && \
