@@ -21,8 +21,8 @@ var authToken string
 var BOT_TOKEN string
 var BOT_ENDPOINT string
 
-// facefusion
-var FACEFUSION_URL string
+// FaceSwapComponent
+var FaceSwapComponent_URL string
 
 // just for sending search requests to pocketbase
 func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
@@ -95,13 +95,13 @@ func LoadEnvironment() (string, bool, string, string) {
 		log.Fatal("empty pocketbase password loaded. env is not correct or configuration is insecure")
 	}
 
-	// FaceFusion
-	faceFusionUrl := os.Getenv("FACEFUSION_URL")
-	if faceFusionUrl == "" {
-		log.Fatalf("переменная окружения FACEFUSION_URL не установлена")
+	// FaceSwapComponent
+	FaceSwapComponentUrl := os.Getenv("FaceSwapComponent_URL")
+	if FaceSwapComponentUrl == "" {
+		log.Fatalf("переменная окружения FaceSwapComponent_URL не установлена")
 	}
 
-	return bot_token, bot_debug, bot_endpoint, faceFusionUrl
+	return bot_token, bot_debug, bot_endpoint, FaceSwapComponentUrl
 }
 
 // Скачивание файла

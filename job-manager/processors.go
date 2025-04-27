@@ -75,10 +75,10 @@ func processFaceSwapTask(task *Task) error {
 		return fmt.Errorf("ошибка скачивания изображения: %v", err)
 	}
 
-	// Обрабатываем через FaceFusion
-	err = processFaceFusion(imagePath, videoPath, outputPath)
+	// Обрабатываем через FaceSwapComponent
+	err = processFaceSwapComponent(imagePath, videoPath, outputPath)
 	if err != nil {
-		return fmt.Errorf("ошибка обработки FaceFusion: %v", err)
+		return fmt.Errorf("ошибка обработки FaceSwapComponent: %v", err)
 	}
 
 	// Загружаем результат обратно
@@ -90,8 +90,8 @@ func processFaceSwapTask(task *Task) error {
 	return nil
 }
 
-// отправляем файлы в FaceFusion и получаем результат
-func processFaceFusion(sourceImage, targetVideo, outputPath string) error {
+// отправляем файлы в FaceSwapComponent и получаем результат
+func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) error {
 	// Открываем файлы
 	imageFile, err := os.Open(sourceImage)
 	if err != nil {
@@ -133,22 +133,22 @@ func processFaceFusion(sourceImage, targetVideo, outputPath string) error {
 	}
 
 	// Отправляем запрос
-	req, err := http.NewRequest("POST", FACEFUSION_URL+"/swap", body)
+	req, err := http.NewRequest("POST", FaceSwapComponent_URL+"/swap", body)
 	if err != nil {
-		return fmt.Errorf("ошибка создания запроса к FaceFusion: %v", err)
+		return fmt.Errorf("ошибка создания запроса к FaceSwapComponent: %v", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("ошибка отправки запроса к FaceFusion: %v", err)
+		return fmt.Errorf("ошибка отправки запроса к FaceSwapComponent: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("ошибка FaceFusion, статус %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("ошибка FaceSwapComponent, статус %d: %s", resp.StatusCode, string(body))
 	}
 
 	// Сохраняем результат

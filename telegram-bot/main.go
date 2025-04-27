@@ -143,7 +143,15 @@ func main() {
 
 		// Приветственное сообщение
 		if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "start") {
-			greeting := fmt.Sprintf("Привет, %s! Добро пожаловать! Справка: /help", userName)
+			greeting := fmt.Sprintf(
+				"👋 Привет, %s! Добро пожаловать в бот для создания кружков и замены лиц!\n\n"+
+					"🎯 Что я умею:\n"+
+					"• Создавать кружки из видео\n"+
+					"• Заменять лица на видео (временно недоступно)\n\n"+
+					"📚 Подробнее о командах: /help\n"+
+					"📊 Проверить статус: /status\n"+
+					"📢 Новости: https://t.me/+HGQVwMhFzIExZDNi",
+				userName)
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, greeting)
 			bot.Send(msg)
 			continue
@@ -151,7 +159,17 @@ func main() {
 
 		// help
 		if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "help") {
-			helpMessage := "Напиши мне фото для создания задачи по замене лица (временно недоступно). Пришли видео для создания кружочка. Канал с новостями https://t.me/+HGQVwMhFzIExZDNi"
+			helpMessage := "📚 Список доступных команд:\n\n" +
+				"🎥 Создание кружка:\n" +
+				"• Отправьте видео\n" +
+				"• Дождитесь обработки\n\n" +
+				"👤 Замена лица (временно недоступно):\n" +
+				"• Отправьте фото лица\n" +
+				"• Отправьте видео\n" +
+				"• Дождитесь обработки\n\n" +
+				"📊 /status - проверить статус и баланс\n" +
+				"❓ /help - показать это сообщение\n\n" +
+				"📢 Новости и обновления: https://t.me/+HGQVwMhFzIExZDNi"
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, helpMessage)
 			bot.Send(msg)
 			continue

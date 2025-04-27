@@ -240,7 +240,7 @@ func wait() {
 }
 
 func main() {
-	BOT_TOKEN, _, BOT_ENDPOINT, FACEFUSION_URL = LoadEnvironment()
+	BOT_TOKEN, _, BOT_ENDPOINT, FaceSwapComponent_URL = LoadEnvironment()
 
 	err := authenticatePocketBase()
 	if err != nil {
