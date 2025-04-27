@@ -1,0 +1,10 @@
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6
+--find-links https://download.pytorch.org/whl/torch_stable.html
+torch==2.1.0
+torchvision==0.16.0
+numpy==1.24.3
+opencv-python==4.8.1.78
+insightface==0.7.3
+onnxruntime==1.16.3 

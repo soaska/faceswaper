@@ -1,0 +1,22 @@
+services:
+  face-swap-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: nvidia
+    environment:
+      - DEVICE_TYPE=nvidia
+    restart: unless-stopped
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./data:/app/temp
+    devices:
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-modeset:/dev/nvidia-modeset
+    security_opt:
+      - label=disable
+      - seccomp=unconfined
+    cap_add:
+      - SYS_ADMIN 
