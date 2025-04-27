@@ -202,7 +202,6 @@ async def swap_faces(
             
             # Добавляем звук из исходного видео
             try:
-                # Используем ffmpeg для добавления звука и перекодирования видео
                 cmd = [
                     'ffmpeg',
                     '-i', str(temp_output_path),  # Видео без звука
@@ -264,12 +263,12 @@ async def swap_faces(
                     detail="Выходной файл пуст"
                 )
             
-            # Возвращаем видео как файл с правильными заголовками
+
             return FileResponse(
                 path=output_path,
                 media_type="video/mp4",
                 filename="face_swap.mp4",
-                background=None,  # Блокируем выполнение до завершения отправки
+                background=None, 
                 headers={
                     "Content-Disposition": "attachment; filename=face_swap.mp4",
                     "Content-Type": "video/mp4",

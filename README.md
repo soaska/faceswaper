@@ -78,6 +78,87 @@ go run .
 обязательно. Папки `telegram-bot/data` и `job-manager/cache` содержат только временные файлы и
 могут быть удалены в период неактивности программы. job-manager требует ffmpeg.
 
+
+# Face Swap Service
+
+Сервис для замены лиц в видео с использованием нейронных сетей. Поддерживает CPU, CUDA.
+
+## Возможности
+
+- Замена лиц в видео с сохранением качества
+- Поддержка различных платформ (CPU, CUDA)
+- Оптимизированная обработка видео
+- Поддержка потоковой передачи видео
+- Автоматическое определение лиц
+- Сохранение звука из исходного видео
+
+## Установка
+
+1. Клонируйте репозиторий:
+```bash
+git clone https://github.com/your-username/face-swap.git
+cd face-swap
+```
+
+2. Выберите версию для вашей платформы:
+
+### CPU версия
+```bash
+docker compose -f face-swap-component/compose.cpu.yaml up --build
+```
+
+### NVIDIA версия
+```bash
+docker compose -f face-swap-component/compose.nvidia.yaml up --build
+```
+
+### Apple Silicon версия
+```bash
+docker compose -f face-swap-component/compose.apple.yaml up --build
+```
+
+## Использование
+
+Сервис доступен по адресу `http://localhost:7860`
+
+### API Endpoints
+
+#### POST /swap
+Замена лиц в видео
+
+Параметры:
+- `source_image`: Изображение с лицом для замены
+- `target_video`: Видео, в котором нужно заменить лица
+
+Ответ:
+- Видео с замененными лицами в формате MP4
+
+#### GET /health
+Проверка состояния сервиса
+
+Ответ:
+```json
+{
+    "status": "healthy",
+    "device_type": "cpu|nvidia|apple",
+    "providers": ["CPUExecutionProvider", ...],
+    "onnxruntime_version": "1.16.3",
+    "torch_version": "2.1.0"
+}
+```
+
+## Оптимизации
+
+- Использование ONNX Runtime для оптимизации инференса
+- Поддержка CUDA для NVIDIA GPU
+- Оптимизированная обработка видео с сохранением качества
+
+## Ограничения
+
+- Требуется хорошее освещение для корректного определения лиц
+- Качество замены зависит от угла поворота лица
+- Рекомендуется использовать видео с разрешением не более 1080p
+
 По вопросам пишите в [issues](https://github.com/soaska/faceswaper/issues) или на почту soaska@cornspace.su.
 
 [License](license): MPL-2.0
