@@ -359,3 +359,20 @@ func getActiveJobs(userID, collection string) ([]map[string]interface{}, error) 
 
 	return nil, nil
 }
+
+// Обновление статуса задачи
+func updateStatus(collection, taskID, status string) error {
+	url := fmt.Sprintf("%s/api/collections/%s/records/%s", pocketBaseUrl, collection, taskID)
+
+	data := map[string]string{
+		"status": status,
+	}
+	jsonData, _ := json.Marshal(data)
+
+	_, err := sendAuthorizedRequest("PATCH", url, jsonData)
+	if err != nil {
+		return fmt.Errorf("ошибка обновления статуса задачи: %v", err)
+	}
+
+	return nil
+}

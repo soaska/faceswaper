@@ -32,29 +32,6 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 		int(userData["face_replace_count"].(float64)),
 	)
 
-	// Получаем активные задачи замены лиц
-	activeFaceJobs, err := getActiveJobs(userData["id"].(string), "face_jobs")
-	if err != nil {
-		return fmt.Errorf("ошибка при получении активных задач замены лиц: %v", err)
-	}
-	if len(activeFaceJobs) > 0 {
-		response += "📋 Активные задачи замены лиц:\n"
-		for _, job := range activeFaceJobs {
-			response += fmt.Sprintf(
-				"🔹 Задача ID: %s\n"+
-					"   Статус: %s\n"+
-					"   Время: %s\n"+
-					"   Обновлена: %s\n\n",
-				job["id"],
-				job["status"],
-				job["created"],
-				job["updated"],
-			)
-		}
-	} else {
-		response += "У вас нет активных задач замены лиц.\n\n"
-	}
-
 	// Получаем активные задачи создания кружков
 	activeCircleJobs, err := getActiveJobs(userData["id"].(string), "circle_jobs")
 	if err != nil {
@@ -63,6 +40,10 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 	if len(activeCircleJobs) > 0 {
 		response += "📋 Активные задачи создания кружков:\n"
 		for _, job := range activeCircleJobs {
+			// Пропускаем задачи со статусом "err cleared"
+			if status, ok := job["status"].(string); ok && strings.Contains(status, "err cleared") {
+				continue
+			}
 			response += fmt.Sprintf(
 				"🔹 Задача ID: %s\n"+
 					"   Статус: %s\n"+
@@ -75,11 +56,97 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 			)
 		}
 	} else {
-		response += "У вас нет активных задач создания кружков.\n"
+		response += "У вас нет активных задач создания кружков.\n\n"
 	}
 
+	// Получаем активные задачи замены лиц
+	activeFaceJobs, err := getActiveJobs(userData["id"].(string), "face_jobs")
+	if err != nil {
+		return fmt.Errorf("ошибка при получении активных задач замены лиц: %v", err)
+	}
+	if len(activeFaceJobs) > 0 {
+		response += "📋 Активные задачи замены лиц:\n"
+		for _, job := range activeFaceJobs {
+			// Пропускаем задачи со статусом "err cleared"
+			if status, ok := job["status"].(string); ok && strings.Contains(status, "err cleared") {
+				continue
+			}
+			response += fmt.Sprintf(
+				"🔹 Задача ID: %s\n"+
+					"   Статус: %s\n"+
+					"   Время: %s\n"+
+					"   Обновлена: %s\n\n",
+				job["id"],
+				job["status"],
+				job["created"],
+				job["updated"],
+			)
+		}
+	} else {
+		response += "У вас нет активных задач замены лиц.\n"
+	}
+
+	// Создаем сообщение с кнопкой
 	msg := tgbotapi.NewMessage(tgChatID, response)
+
+	// Добавляем кнопку сброса ошибок
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("Сбросить ошибки", "reset_errors"),
+		),
+	)
+	msg.ReplyMarkup = keyboard
+
 	bot.Send(msg)
+	return nil
+}
+
+// Обработка нажатия на кнопку сброса ошибок
+func handleResetErrors(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
+	tgUserID := int(update.CallbackQuery.From.ID)
+	tgChatID := update.CallbackQuery.Message.Chat.ID
+
+	userData, err := getUserInfo(tgUserID)
+	if err != nil {
+		return fmt.Errorf("ошибка при получении данных о пользователе: %v", err)
+	}
+
+	// Получаем все задачи пользователя
+	faceJobs, err := getActiveJobs(userData["id"].(string), "face_jobs")
+	if err != nil {
+		return fmt.Errorf("ошибка при получении задач замены лиц: %v", err)
+	}
+
+	circleJobs, err := getActiveJobs(userData["id"].(string), "circle_jobs")
+	if err != nil {
+		return fmt.Errorf("ошибка при получении задач создания кружков: %v", err)
+	}
+
+	// Сбрасываем статусы ошибок
+	for _, job := range faceJobs {
+		if status, ok := job["status"].(string); ok && strings.HasPrefix(status, "error") {
+			newStatus := fmt.Sprintf("err cleared: %s", strings.TrimPrefix(status, "error"))
+			err = updateStatus("face_jobs", job["id"].(string), newStatus)
+			if err != nil {
+				log.Printf("Ошибка обновления статуса задачи %s: %v", job["id"], err)
+			}
+		}
+	}
+
+	for _, job := range circleJobs {
+		if status, ok := job["status"].(string); ok && strings.HasPrefix(status, "error:") {
+			newStatus := fmt.Sprintf("err cleared: %s", strings.TrimPrefix(status, "error:"))
+			err = updateStatus("circle_jobs", job["id"].(string), newStatus)
+			if err != nil {
+				log.Printf("Ошибка обновления статуса задачи %s: %v", job["id"], err)
+			}
+		}
+	}
+
+	// Отправляем подтверждение
+	msg := tgbotapi.NewMessage(tgChatID, "Статусы ошибок сброшены. Используйте /status для проверки.")
+	bot.Send(msg)
+
 	return nil
 }
 
@@ -129,6 +196,19 @@ func main() {
 	// Основной обработчик
 	updates := bot.GetUpdatesChan(u)
 	for update := range updates {
+		// Обработка нажатия на кнопку
+		if update.CallbackQuery != nil {
+			if update.CallbackQuery.Data == "reset_errors" {
+				err = handleResetErrors(bot, update)
+				if err != nil {
+					log.Printf("Ошибка при сбросе ошибок: %v", err)
+					msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Произошла ошибка при сбросе статусов. Попробуйте позже.")
+					bot.Send(msg)
+				}
+				continue
+			}
+		}
+
 		if update.Message == nil {
 			continue
 		}

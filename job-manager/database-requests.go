@@ -192,7 +192,7 @@ func getOwnerTGID(ownerID string) (string, error) {
 // Получение задачи в статусе "queued"
 func fetchQueuedJobs(collection string) (*Task, error) {
 	filter := "status='queued'"
-	url := fmt.Sprintf("%s/api/collections/%s/records?filter=%s&perPage=1", pocketBaseUrl, collection, filter)
+	url := fmt.Sprintf("%s/api/collections/%s/records?filter=%s&perPage=1&sort=created", pocketBaseUrl, collection, filter)
 
 	body, err := sendAuthorizedRequest("GET", url, nil)
 	if err != nil {
