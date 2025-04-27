@@ -23,7 +23,7 @@ app = FastAPI(title="Face Swap API")
 
 TEMP_DIR = Path("temp")
 if TEMP_DIR and os.path.exists(TEMP_DIR):
-    shutil.rmtree(mydir)
+    shutil.rmtree(TEMP_DIR)
 TEMP_DIR.mkdir(exist_ok=True)
 
 DEVICE_TYPE = os.getenv("DEVICE_TYPE", "cpu").lower()
