@@ -32,9 +32,9 @@ RUN apt-get update && apt-get install -y \
     g++ \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt && \
-    pip3 install --no-cache-dir onnxruntime-gpu==1.16.3
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 RUN mkdir -p models && \
     wget -O ./models/inswapper_128.onnx https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx && \
