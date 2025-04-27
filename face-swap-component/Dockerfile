@@ -13,7 +13,8 @@ wget -O ./models/inswapper_128.onnx https://huggingface.co/ezioruan/inswapper_12
 ls -la ./models/
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
+RUN pip install onnxruntime==1.16.3
 
 COPY . .
 
@@ -34,7 +35,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install -r requirements.txt
+RUN pip3 install onnxruntime-gpu==1.16.3 
 
 RUN mkdir -p models && \
     wget -O ./models/inswapper_128.onnx https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx && \
@@ -69,8 +71,8 @@ ENV ORT_ENABLE_COREML=1
 ENV ORT_COREML_DEVICE=GPU
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir onnxruntime
+RUN pip install -r requirements.txt && \
+    pip install onnxruntime==1.16.3
 
 RUN mkdir -p models && \
     wget -O ./models/inswapper_128.onnx https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx && \
