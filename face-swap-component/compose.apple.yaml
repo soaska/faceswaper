@@ -11,8 +11,3 @@ services:
       - "7860:7860"
     volumes:
       - ./data:/app/temp
-    security_opt:
-      - label=disable
-      - seccomp=unconfined
-    cap_add:
-      - SYS_ADMIN 

@@ -11,12 +11,10 @@ services:
       - "7860:7860"
     volumes:
       - ./data:/app/temp
-    devices:
-      - /dev/nvidia0:/dev/nvidia0
-      - /dev/nvidiactl:/dev/nvidiactl
-      - /dev/nvidia-modeset:/dev/nvidia-modeset
-    security_opt:
-      - label=disable
-      - seccomp=unconfined
-    cap_add:
-      - SYS_ADMIN 
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu] 
