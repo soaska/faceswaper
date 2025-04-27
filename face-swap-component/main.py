@@ -116,7 +116,7 @@ async def swap_faces(
 
         logger.info(f"Processing files: source={source_path}, target={target_path}")
         
-        if output_path or os.path.exists(output_path):
+        if output_path and os.path.exists(output_path):
             os.remove(output_path)
         # Сохраняем файлы
         with open(source_path, "wb") as f:
