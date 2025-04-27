@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Face Swap API")
 
 TEMP_DIR = Path("temp")
-if TEMP_DIR and os.path.exists(TEMP_DIR):
-    shutil.rmtree(TEMP_DIR)
+if TEMP_DIR and os.path.exists(TEMP_DIR+'/output.mp4'):
+    shutil.rmtree('temp/output.mp4')
 TEMP_DIR.mkdir(exist_ok=True)
 
 DEVICE_TYPE = os.getenv("DEVICE_TYPE", "cpu").lower()
