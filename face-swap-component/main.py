@@ -115,7 +115,9 @@ async def swap_faces(
         temp_output_path = TEMP_DIR / "temp_output.mp4"
 
         logger.info(f"Processing files: source={source_path}, target={target_path}")
-
+        
+        if output_path or os.path.exists(output_path):
+            os.remove(output)
         # Сохраняем файлы
         with open(source_path, "wb") as f:
             shutil.copyfileobj(source_image.file, f)
@@ -251,8 +253,6 @@ async def swap_faces(
                 os.remove(target_path)
             if temp_output_path and os.path.exists(temp_output_path):
                 os.remove(temp_output_path)
-            if output_path and os.path.exists(output_path):
-                os.remove(output_path)
             
             # Проверяем, что выходной файл существует и имеет размер
             if not os.path.exists(output_path):
