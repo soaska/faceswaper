@@ -32,13 +32,14 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 		int(userData["face_replace_count"].(float64)),
 	)
 
-	activeJobs, err := getActiveJobs(userData["id"].(string), "face_jobs")
+	// Получаем активные задачи замены лиц
+	activeFaceJobs, err := getActiveJobs(userData["id"].(string), "face_jobs")
 	if err != nil {
-		return fmt.Errorf("ошибка при получении активных задач: %v", err)
+		return fmt.Errorf("ошибка при получении активных задач замены лиц: %v", err)
 	}
-	if len(activeJobs) > 0 {
+	if len(activeFaceJobs) > 0 {
 		response += "📋 Активные задачи замены лиц:\n"
-		for _, job := range activeJobs {
+		for _, job := range activeFaceJobs {
 			response += fmt.Sprintf(
 				"🔹 Задача ID: %s\n"+
 					"   Статус: %s\n"+
@@ -51,16 +52,17 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 			)
 		}
 	} else {
-		response += "У вас нет активных задач замены лиц.\n"
+		response += "У вас нет активных задач замены лиц.\n\n"
 	}
 
-	activeJobs, err = getActiveJobs(userData["id"].(string), "circle_jobs")
+	// Получаем активные задачи создания кружков
+	activeCircleJobs, err := getActiveJobs(userData["id"].(string), "circle_jobs")
 	if err != nil {
-		return fmt.Errorf("ошибка при получении активных задач: %v", err)
+		return fmt.Errorf("ошибка при получении активных задач создания кружков: %v", err)
 	}
-	if len(activeJobs) > 0 {
+	if len(activeCircleJobs) > 0 {
 		response += "📋 Активные задачи создания кружков:\n"
-		for _, job := range activeJobs {
+		for _, job := range activeCircleJobs {
 			response += fmt.Sprintf(
 				"🔹 Задача ID: %s\n"+
 					"   Статус: %s\n"+
@@ -72,6 +74,8 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 				job["updated"],
 			)
 		}
+	} else {
+		response += "У вас нет активных задач создания кружков.\n"
 	}
 
 	msg := tgbotapi.NewMessage(tgChatID, response)

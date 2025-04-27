@@ -113,8 +113,8 @@ func incrementCircleCount(tgUserID int) error {
 }
 
 // Загрузка обработанного файла в output_media
-func uploadOutputMedia(taskID, filePath string) error {
-	url := fmt.Sprintf("%s/api/collections/circle_jobs/records/%s", pocketBaseUrl, taskID)
+func uploadOutputMedia(collection, taskID, filePath string) error {
+	url := fmt.Sprintf("%s/api/collections/%s/records/%s", pocketBaseUrl, collection, taskID)
 
 	file, err := os.Open(filePath)
 	if err != nil {

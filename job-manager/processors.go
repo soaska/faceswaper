@@ -37,7 +37,7 @@ func processCircleTask(task *Task) error {
 		return fmt.Errorf("ошибка обработки видео: %v", err)
 	}
 
-	err = uploadOutputMedia(task.ID, outputFilePath)
+	err = uploadOutputMedia("circle_jobs", task.ID, outputFilePath)
 	if err != nil {
 		return fmt.Errorf("ошибка загрузки кружка в бд: %v", err)
 	}
@@ -82,7 +82,7 @@ func processFaceSwapTask(task *Task) error {
 	}
 
 	// Загружаем результат обратно
-	err = uploadOutputMedia(task.ID, outputPath)
+	err = uploadOutputMedia("face_jobs", task.ID, outputPath)
 	if err != nil {
 		return fmt.Errorf("ошибка загрузки результата в бд: %v", err)
 	}
@@ -151,6 +151,12 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) error
 		return fmt.Errorf("ошибка FaceSwapComponent, статус %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Проверяем Content-Type
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "video/mp4" {
+		return fmt.Errorf("неожиданный Content-Type ответа: %s", contentType)
+	}
+
 	// Сохраняем результат
 	outFile, err := os.Create(outputPath)
 	if err != nil {
@@ -158,9 +164,19 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) error
 	}
 	defer outFile.Close()
 
+	// Копируем содержимое ответа в файл
 	_, err = io.Copy(outFile, resp.Body)
 	if err != nil {
 		return fmt.Errorf("ошибка сохранения результата: %v", err)
+	}
+
+	// Проверяем, что файл создан и имеет размер
+	fileInfo, err := outFile.Stat()
+	if err != nil {
+		return fmt.Errorf("ошибка получения информации о файле: %v", err)
+	}
+	if fileInfo.Size() == 0 {
+		return fmt.Errorf("получен пустой файл результата")
 	}
 
 	return nil

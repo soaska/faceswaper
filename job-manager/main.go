@@ -23,49 +23,6 @@ type Task struct {
 	Status      string `json:"status"`
 }
 
-// Отправка сообщения в Telegram
-func sendTelegramMessage(chatID string, message string) error {
-	url := fmt.Sprintf("%s/bot%s/sendMessage", BOT_ENDPOINT, os.Getenv("TELEGRAM_APITOKEN"))
-
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	err := writer.WriteField("chat_id", chatID)
-	if err != nil {
-		return fmt.Errorf("ошибка добавления поля chat_id: %v", err)
-	}
-
-	err = writer.WriteField("text", message)
-	if err != nil {
-		return fmt.Errorf("ошибка добавления поля text: %v", err)
-	}
-
-	err = writer.Close()
-	if err != nil {
-		return fmt.Errorf("ошибка закрытия записи multipart данных: %v", err)
-	}
-
-	req, err := http.NewRequest("POST", url, body)
-	if err != nil {
-		return fmt.Errorf("ошибка создания HTTP-запроса: %v", err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("ошибка отправки запроса Telegram API: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("ошибка в Telegram API. Код %d: %s", resp.StatusCode, string(body))
-	}
-
-	return nil
-}
-
 // Основной цикл обработки задач создания кружков
 func processCircleJobs() {
 	for {
@@ -88,25 +45,29 @@ func processCircleJobs() {
 		err = processCircleTask(task)
 		if err != nil {
 			log.Printf("Ошибка обработки задачи %s: %v", task.ID, err)
-			updateStatus("circle_jobs", task.ID, fmt.Sprintf("error. time: %v", time.Now()))
+			updateStatus("circle_jobs", task.ID, fmt.Sprintf("error: %v", err))
+			sendErrorNotification(task.Owner, task.ID)
 			continue
 		}
 
 		err = updateStatus("circle_jobs", task.ID, "sending")
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'sending' для задачи %s: %v", task.ID, err)
+			continue
 		}
 
 		err = notifyCircleOwner(task)
 		if err != nil {
 			log.Printf("Ошибка отправки для задачи %s: %v", task.ID, err)
+			updateStatus("circle_jobs", task.ID, fmt.Sprintf("error: %v", err))
+			sendErrorNotification(task.Owner, task.ID)
+			continue
 		}
 
 		err = updateStatus("circle_jobs", task.ID, "completed")
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'completed' для задачи %s: %v", task.ID, err)
 		}
-
 	}
 }
 
@@ -132,7 +93,25 @@ func processFaceSwapJobs() {
 		err = processFaceSwapTask(task)
 		if err != nil {
 			log.Printf("Ошибка обработки задачи замены лиц %s: %v", task.ID, err)
-			updateStatus("face_jobs", task.ID, fmt.Sprintf("error. time: %v", time.Now()))
+			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
+			sendErrorNotification(task.Owner, task.ID)
+			continue
+		}
+
+		// Устанавливаем статус sending перед отправкой
+		err = updateStatus("face_jobs", task.ID, "sending")
+		if err != nil {
+			log.Printf("Ошибка смены статуса на 'sending' для задачи %s: %v", task.ID, err)
+			continue
+		}
+
+		// Отправляем результат пользователю
+		outputPath := filepath.Join("cache", fmt.Sprintf("%s_output.mp4", task.ID))
+		err = sendVideoToUser(task.Owner, outputPath)
+		if err != nil {
+			log.Printf("Ошибка отправки видео пользователю для задачи %s: %v", task.ID, err)
+			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
+			sendErrorNotification(task.Owner, task.ID)
 			continue
 		}
 

@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     wget \
     g++ \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 
@@ -42,6 +43,7 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     wget \
     g++ \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Копирование файлов проекта
@@ -72,6 +74,7 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     wget \
     g++ \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Копирование файлов проекта

@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 import os
 import tempfile
 import shutil
@@ -106,8 +106,7 @@ except Exception as e:
 @app.post("/swap")
 async def swap_faces(
     source_image: UploadFile = File(...),
-    target_video: UploadFile = File(...),
-    task_id: str = Form(...)
+    target_video: UploadFile = File(...)
 ):
     source_path = None
     target_path = None
@@ -117,26 +116,10 @@ async def swap_faces(
         # Сохраняем загруженные файлы во временную директорию
         source_path = TEMP_DIR / source_image.filename
         target_path = TEMP_DIR / target_video.filename
-        
-        # Используем task_id в имени выходного файла для идентификации
-        output_path = TEMP_DIR / f"{task_id}_output.mp4"
-        temp_output_path = TEMP_DIR / f"{task_id}_temp_output.mp4"  # Временный файл для видео без звука
+        output_path = TEMP_DIR / "output.mp4"
+        temp_output_path = TEMP_DIR / "temp_output.mp4"
 
         logger.info(f"Processing files: source={source_path}, target={target_path}")
-        logger.info(f"Task ID: {task_id}")
-
-        # Проверяем расширения файлов
-        if not source_image.filename.lower().endswith(('.jpg', '.jpeg', '.png')):
-            raise HTTPException(
-                status_code=400,
-                detail="Неподдерживаемый формат изображения. Используйте JPG, JPEG или PNG."
-            )
-        
-        if not target_video.filename.lower().endswith(('.mp4', '.avi', '.mov')):
-            raise HTTPException(
-                status_code=400,
-                detail="Неподдерживаемый формат видео. Используйте MP4, AVI или MOV."
-            )
 
         # Сохраняем файлы
         with open(source_path, "wb") as f:
@@ -151,7 +134,7 @@ async def swap_faces(
             if source_img is None:
                 raise HTTPException(
                     status_code=400, 
-                    detail="Не удалось загрузить исходное изображение. Проверьте, что формат файла поддерживается."
+                    detail="Не удалось загрузить исходное изображение"
                 )
             source_img = cv2.cvtColor(source_img, cv2.COLOR_BGR2RGB)
             
@@ -160,7 +143,7 @@ async def swap_faces(
             if len(source_faces) == 0:
                 raise HTTPException(
                     status_code=400, 
-                    detail="Лицо не найдено на исходном изображении. Используйте фотографию с четко видимым лицом."
+                    detail="Лицо не найдено на исходном изображении"
                 )
             source_face = source_faces[0]
             
@@ -169,7 +152,7 @@ async def swap_faces(
             if not target_vid.isOpened():
                 raise HTTPException(
                     status_code=400, 
-                    detail="Не удалось открыть видео. Проверьте, что формат видео поддерживается."
+                    detail="Не удалось открыть видео"
                 )
             
             # Получаем параметры видео
@@ -178,20 +161,6 @@ async def swap_faces(
             fps = target_vid.get(cv2.CAP_PROP_FPS)
             
             logger.info(f"Video parameters: width={width}, height={height}, fps={fps}")
-            
-            # Проверка параметров видео
-            if width <= 0 or height <= 0 or fps <= 0:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="Некорректные параметры видео. Проверьте, что видео не повреждено."
-                )
-            
-            # Проверка размера видео
-            if width > 1920 or height > 1080:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Видео слишком высокого разрешения. Максимальное разрешение: 1920x1080."
-                )
             
             # Создаем VideoWriter для сохранения результата (без звука)
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -207,7 +176,7 @@ async def swap_faces(
                     break
                 
                 frame_count += 1
-                if frame_count % 10 == 0:  # Логируем каждые 10 кадров
+                if frame_count % 10 == 0:
                     logger.info(f"Processing frame {frame_count}")
                 
                 # Конвертируем кадр в RGB
@@ -240,7 +209,7 @@ async def swap_faces(
             if frame_count > 0 and not faces_found:
                 raise HTTPException(
                     status_code=400, 
-                    detail="Не удалось обнаружить лица в видео. Используйте видео, где лицо хорошо видно."
+                    detail="Не удалось обнаружить лица в видео"
                 )
             
             # Добавляем звук из исходного видео
@@ -293,27 +262,30 @@ async def swap_faces(
             if not os.path.exists(output_path):
                 raise HTTPException(
                     status_code=500, 
-                    detail="Выходной файл не был создан. Возможно, произошла ошибка при обработке."
+                    detail="Выходной файл не был создан"
                 )
             
             file_size = os.path.getsize(output_path)
             if file_size == 0:
                 raise HTTPException(
                     status_code=500, 
-                    detail="Выходной файл пуст. Возможно, произошла ошибка при обработке видео."
+                    detail="Выходной файл пуст"
                 )
             
-            logger.info(f"Returning processed video for task {task_id}")
+            # Читаем файл и возвращаем его содержимое
+            with open(output_path, "rb") as f:
+                video_content = f.read()
             
-            # Возвращаем результат через API
-            return FileResponse(
-                output_path,
-                media_type="video/mp4",
-                filename=f"face_swap_{task_id}.mp4"
+            # Очищаем выходной файл
+            os.remove(output_path)
+            
+            # Возвращаем видео в теле ответа
+            return Response(
+                content=video_content,
+                media_type="video/mp4"
             )
             
         except HTTPException as http_exc:
-            # Пробрасываем HTTP исключения дальше
             raise http_exc
         except Exception as e:
             logger.error(f"Error during face swap: {str(e)}")
@@ -332,7 +304,6 @@ async def swap_faces(
             )
             
     except HTTPException as http_exc:
-        # Пробрасываем HTTP исключения дальше
         raise http_exc
     except Exception as e:
         logger.error(f"Error during file handling: {str(e)}")
