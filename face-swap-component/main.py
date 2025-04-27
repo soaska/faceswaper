@@ -248,6 +248,8 @@ async def swap_faces(
                 os.remove(target_path)
             if temp_output_path and os.path.exists(temp_output_path):
                 os.remove(temp_output_path)
+            if output_path and os.path.exists(output_path):
+                os.remove(output_path)
             
             # Проверяем, что выходной файл существует и имеет размер
             if not os.path.exists(output_path):
