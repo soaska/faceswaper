@@ -14,6 +14,7 @@ import logging
 import requests
 import json
 import subprocess
+import shutil
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ app = FastAPI(title="Face Swap API")
 
 TEMP_DIR = Path("temp")
 if TEMP_DIR and os.path.exists(TEMP_DIR):
-    os.remove(TEMP_DIR)
+    shutil.rmtree(mydir)
 TEMP_DIR.mkdir(exist_ok=True)
 
 DEVICE_TYPE = os.getenv("DEVICE_TYPE", "cpu").lower()
