@@ -15,6 +15,7 @@ import requests
 import json
 import subprocess
 import shutil
+import glob
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -22,9 +23,26 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Face Swap API")
 
 TEMP_DIR = Path("temp")
-if TEMP_DIR and os.path.exists(Path('temp/output.mp4')):
-    shutil.rmtree(Path('temp/output.mp4'))
 TEMP_DIR.mkdir(exist_ok=True)
+
+def cleanup_temp_files():
+    """Очищает все временные файлы в директории temp"""
+    try:
+        # Удаляем все файлы в директории temp
+        for file_path in glob.glob(str(TEMP_DIR / "*")):
+            try:
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path)
+            except Exception as e:
+                logger.warning(f"Failed to remove {file_path}: {e}")
+        logger.info("Temporary files cleaned up successfully")
+    except Exception as e:
+        logger.error(f"Error during cleanup: {e}")
+
+# Очищаем кеш при старте приложения
+cleanup_temp_files()
 
 DEVICE_TYPE = os.getenv("DEVICE_TYPE", "cpu").lower()
 if DEVICE_TYPE == "nvidia":
@@ -108,6 +126,9 @@ async def swap_faces(
     output_path = None
     temp_output_path = None
     try:
+        # Очищаем старые временные файлы перед началом обработки
+        cleanup_temp_files()
+        
         # Сохраняем загруженные файлы во временную директорию
         source_path = TEMP_DIR / source_image.filename
         target_path = TEMP_DIR / target_video.filename
@@ -246,13 +267,8 @@ async def swap_faces(
                     detail=f"Ошибка при добавлении звука к видео: {str(e)}"
                 )
             
-            # Очищаем временные файлы
-            if source_path and os.path.exists(source_path):
-                os.remove(source_path)
-            if target_path and os.path.exists(target_path):
-                os.remove(target_path)
-            if temp_output_path and os.path.exists(temp_output_path):
-                os.remove(temp_output_path)
+            # Очищаем временные файлы после успешной обработки
+            cleanup_temp_files()
             
             # Проверяем, что выходной файл существует и имеет размер
             if not os.path.exists(output_path):
@@ -268,7 +284,6 @@ async def swap_faces(
                     detail="Выходной файл пуст"
                 )
             
-
             return FileResponse(
                 path=output_path,
                 media_type="video/mp4",
@@ -285,34 +300,20 @@ async def swap_faces(
         except HTTPException as http_exc:
             raise http_exc
         except Exception as e:
-            logger.error(f"Error during face swap: {str(e)}")
             # Очищаем временные файлы в случае ошибки
-            if source_path and os.path.exists(source_path):
-                os.remove(source_path)
-            if target_path and os.path.exists(target_path):
-                os.remove(target_path)
-            if temp_output_path and os.path.exists(temp_output_path):
-                os.remove(temp_output_path)
-            if output_path and os.path.exists(output_path):
-                os.remove(output_path)
+            cleanup_temp_files()
+            logger.error(f"Error during face swap: {str(e)}")
             raise HTTPException(
-                status_code=500, 
-                detail=f"Ошибка при замене лиц: {str(e)}"
+                status_code=500,
+                detail=f"Ошибка при обработке видео: {str(e)}"
             )
             
     except HTTPException as http_exc:
         raise http_exc
     except Exception as e:
-        logger.error(f"Error during file handling: {str(e)}")
         # Очищаем временные файлы в случае ошибки
-        if source_path and os.path.exists(source_path):
-            os.remove(source_path)
-        if target_path and os.path.exists(target_path):
-            os.remove(target_path)
-        if temp_output_path and os.path.exists(temp_output_path):
-            os.remove(temp_output_path)
-        if output_path and os.path.exists(output_path):
-            os.remove(output_path)
+        cleanup_temp_files()
+        logger.error(f"Error during file handling: {str(e)}")
         raise HTTPException(
             status_code=400, 
             detail=f"Ошибка при обработке файлов: {str(e)}"
