@@ -27,9 +27,10 @@ RUN mkdir -p temp/models temp/media temp/cache
 RUN wget https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx -O temp/models/inswapper_128.onnx
 
 # Set environment variables
-ENV PYTHONUNBUFFERED=1
-ENV OMP_NUM_THREADS=4
-ENV MKL_NUM_THREADS=4
+ENV PYTHONUNBUFFERED=1 \
+    OMP_NUM_THREADS=4 \
+    MKL_NUM_THREADS=4 \
+    DEVICE_TYPE=cpu
 
 # Run application
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"] 

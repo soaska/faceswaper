@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Face Swap API")
 
-# Create necessary directories
 TEMP_DIR = Path("temp")
 MODELS_DIR = TEMP_DIR / "models"
 MEDIA_DIR = TEMP_DIR / "media"
@@ -31,9 +30,10 @@ MEDIA_DIR.mkdir(exist_ok=True)
 CACHE_DIR.mkdir(exist_ok=True)
 
 def cleanup_temp_files():
-    """Clean up temporary media files"""
+    """
+    Очищает временные файлы из директории MEDIA_DIR.
+    """
     try:
-        # Clean up only media files, keep models and cache
         for file_path in glob.glob(str(MEDIA_DIR / "*")):
             try:
                 if os.path.isfile(file_path):
@@ -47,21 +47,23 @@ def cleanup_temp_files():
         logger.error(f"Error during cleanup: {e}")
 
 def ensure_model_exists():
-    """Ensure the face swap model exists in the models directory"""
+    """
+    Проверяет наличие модели inswapper_128.onnx в директории MODELS_DIR.
+    """
     model_path = MODELS_DIR / 'inswapper_128.onnx'
     if not model_path.exists():
         logger.error(f"Model not found at {model_path}")
-        raise RuntimeError(f"Model not found at {model_path}. Please ensure the model is present in the models directory.")
+        raise RuntimeError(f"Model not found at {model_path}")
     return model_path
 
 def setup_cache():
-    """Setup and verify cache directory"""
+    """
+    Настраивает кэш для InsightFace.
+    """
     try:
-        # Set InsightFace cache directory
         os.environ['INSIGHTFACE_CACHE_DIR'] = str(CACHE_DIR)
         logger.info(f"Using InsightFace cache directory: {CACHE_DIR}")
         
-        # Verify cache directory is writable
         test_file = CACHE_DIR / '.test'
         test_file.touch()
         test_file.unlink()
@@ -71,11 +73,9 @@ def setup_cache():
         logger.error(f"Error setting up cache: {e}")
         return False
 
-# Initialize cache and cleanup
 setup_cache()
 cleanup_temp_files()
 
-# Configure GPU settings
 DEVICE_TYPE = os.getenv("DEVICE_TYPE", "cpu").lower()
 if DEVICE_TYPE == "nvidia":
     try:
@@ -85,7 +85,7 @@ if DEVICE_TYPE == "nvidia":
             ctx_id = -1
         else:
             cuda_device = torch.cuda.current_device()
-            cuda_memory = torch.cuda.get_device_properties(cuda_device).total_memory / 1024**3  # Convert to GB
+            cuda_memory = torch.cuda.get_device_properties(cuda_device).total_memory / 1024**3
             logger.info(f"Using CUDA device with {cuda_memory:.2f}GB memory")
             
             providers = [
@@ -98,12 +98,10 @@ if DEVICE_TYPE == "nvidia":
             ]
             ctx_id = cuda_device
             
-            # Set CUDA environment variables
             os.environ['CUDA_VISIBLE_DEVICES'] = str(cuda_device)
             os.environ['OMP_NUM_THREADS'] = str(os.cpu_count())
             os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
             
-            # Configure session options for CUDA
             session_options = onnxruntime.SessionOptions()
             session_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
             session_options.enable_mem_pattern = True
@@ -119,7 +117,6 @@ else:
     providers = ['CPUExecutionProvider']
     ctx_id = -1
 
-# Initialize face analyzer
 face_analyzer = FaceAnalysis(
     name='buffalo_l',
     providers=providers,
@@ -128,7 +125,6 @@ face_analyzer = FaceAnalysis(
 )
 face_analyzer.prepare(ctx_id=ctx_id, det_size=(640, 640))
 
-# Load swapper model
 MODEL_PATH = MODELS_DIR / 'inswapper_128.onnx'
 if not MODEL_PATH.exists():
     raise RuntimeError(f"Model not found at {MODEL_PATH}")
@@ -140,7 +136,9 @@ swapper = insightface.model_zoo.get_model(
 )
 
 def process_video_chunk(chunk_data):
-    """Process a chunk of video frames"""
+    """
+    Обрабатывает чанк видео, заменяя лица в каждом кадре.
+    """
     chunk_frames, source_face, start_idx = chunk_data
     processed_frames = []
     
@@ -163,14 +161,23 @@ async def swap_faces(
     source_image: UploadFile = File(...),
     target_video: UploadFile = File(...)
 ):
-    try:
-        # Clean up any existing temporary files
-        cleanup_temp_files()
+    """
+    Эндпоинт для замены лиц в видео.
+    
+    Args:
+        source_image (UploadFile): Изображение с исходным лицом
+        target_video (UploadFile): Видео, в котором нужно заменить лица
         
-        # Ensure model exists
+    Returns:
+        FileResponse: Обработанное видео с замененными лицами
+        
+    Raises:
+        HTTPException: При ошибках обработки файлов или недостаточном количестве лиц
+    """
+    try:
+        cleanup_temp_files()
         model_path = ensure_model_exists()
         
-        # Save uploaded files
         source_path = MEDIA_DIR / source_image.filename
         target_path = MEDIA_DIR / target_video.filename
         output_path = MEDIA_DIR / "output.mp4"
@@ -181,7 +188,6 @@ async def swap_faces(
         with open(target_path, "wb") as f:
             shutil.copyfileobj(target_video.file, f)
 
-        # Process source image
         source_img = cv2.imread(str(source_path))
         if source_img is None:
             raise HTTPException(status_code=400, detail="Failed to load source image")
@@ -191,7 +197,6 @@ async def swap_faces(
             raise HTTPException(status_code=400, detail="No face detected in source image")
         source_face = source_faces[0]
 
-        # Process target video
         target_vid = cv2.VideoCapture(str(target_path))
         if not target_vid.isOpened():
             raise HTTPException(status_code=400, detail="Failed to open video")
@@ -200,7 +205,6 @@ async def swap_faces(
         height = int(target_vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = target_vid.get(cv2.CAP_PROP_FPS)
         
-        # Read all frames
         frames = []
         while True:
             ret, frame = target_vid.read()
@@ -213,27 +217,21 @@ async def swap_faces(
         if len(frames) == 0:
             raise HTTPException(status_code=400, detail="No frames read from video")
         
-        # Calculate chunk size based on GPU memory
         if DEVICE_TYPE == "nvidia":
-            # Estimate memory per frame (rough estimation)
-            frame_memory = width * height * 3  # RGB bytes per frame
-            # Calculate available memory (using 2.5GB as base)
-            available_memory = 2.5 * 1024 * 1024 * 1024  # 2.5GB in bytes
-            # Calculate how many frames we can process at once
-            chunk_size = int(available_memory / (frame_memory * 2.5))  # 2.5x buffer for processing
-            chunk_size = max(1, min(chunk_size, 30))  # Limit between 1 and 30 frames
+            frame_memory = width * height * 3
+            available_memory = 2.5 * 1024 * 1024 * 1024
+            chunk_size = int(available_memory / (frame_memory * 2.5))
+            chunk_size = max(1, min(chunk_size, 30))
         else:
-            chunk_size = 30  # Default chunk size for CPU
+            chunk_size = 30
         
         logger.info(f"Processing video with chunk size: {chunk_size} frames")
         
-        # Split frames into chunks
         chunks = []
         for i in range(0, len(frames), chunk_size):
             chunk = frames[i:i + chunk_size]
             chunks.append((chunk, source_face, i))
         
-        # Process chunks in parallel
         processed_frames = [None] * len(frames)
         with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
             futures = [executor.submit(process_video_chunk, chunk) for chunk in chunks]
@@ -241,57 +239,62 @@ async def swap_faces(
                 start_idx, chunk_frames = future.result()
                 processed_frames[start_idx:start_idx + len(chunk_frames)] = chunk_frames
         
-        # Create video writer
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(str(temp_output_path), fourcc, fps, (width, height))
         
-        # Write processed frames
         for frame in processed_frames:
             out.write(frame)
-        
         out.release()
         
-        # Add audio using FFmpeg
-        cmd = [
-            'ffmpeg',
-            '-y',  # Force overwrite output file
+        if os.path.exists(output_path):
+            os.remove(output_path)
+            
+        command = [
+            'ffmpeg', '-y',
             '-i', str(temp_output_path),
             '-i', str(target_path),
-            '-c:v', 'libx264',
-            '-preset', 'medium',
-            '-crf', '23',
+            '-c:v', 'copy',
             '-c:a', 'aac',
-            '-b:a', '128k',
             '-map', '0:v:0',
             '-map', '1:a:0',
-            '-movflags', '+faststart',
-            '-shortest',
             str(output_path)
         ]
         
-        subprocess.run(cmd, check=True)
+        subprocess.run(command, check=True)
         
         return FileResponse(
-            path=output_path,
-            media_type="video/mp4",
-            filename="face_swap.mp4"
+            str(output_path),
+            media_type='video/mp4',
+            filename='output.mp4'
         )
         
     except Exception as e:
-        logger.error(f"Error during face swap: {str(e)}")
+        logger.error(f"Error processing video: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # Clean up temporary files
         cleanup_temp_files()
 
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "healthy",
-        "device_type": DEVICE_TYPE,
-        "providers": providers,
-        "onnxruntime_version": onnxruntime.__version__,
-        "torch_version": torch.__version__,
-        "cache_directory": str(CACHE_DIR),
-        "models_directory": str(MODELS_DIR)
-    } 
+    """
+    Эндпоинт для проверки состояния сервиса.
+    
+    Returns:
+        dict: Информация о состоянии сервиса, включая тип устройства,
+              доступные провайдеры и версии используемых библиотек
+        
+    Raises:
+        HTTPException: При ошибках получения информации о состоянии
+    """
+    try:
+        device_info = {
+            "status": "healthy",
+            "device_type": DEVICE_TYPE,
+            "providers": [p[0] if isinstance(p, tuple) else p for p in providers],
+            "onnxruntime_version": onnxruntime.__version__,
+            "torch_version": torch.__version__
+        }
+        return device_info
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
