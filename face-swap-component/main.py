@@ -88,17 +88,11 @@ if DEVICE_TYPE == "nvidia":
             cuda_memory = torch.cuda.get_device_properties(cuda_device).total_memory / 1024**3
             logger.info(f"Using CUDA device with {cuda_memory:.2f}GB memory")
             
-            # reserve 1GB for system
-            available_memory = (cuda_memory - 1) * 1024 * 1024 * 1024
-            
             providers = [
                 ('CUDAExecutionProvider', {
                     'device_id': cuda_device,
                     'cudnn_conv_algo_search': 'EXHAUSTIVE',
-                    'do_copy_in_default_stream': True,
-                    'arena_extend_strategy': 'kNextPowerOfTwo',
-                    'gpu_mem_limit': str(available_memory),
-                    'cudnn_conv_use_max_workspace': '1'
+                    'do_copy_in_default_stream': True
                 }),
                 'CPUExecutionProvider'
             ]
@@ -114,7 +108,6 @@ if DEVICE_TYPE == "nvidia":
             session_options.enable_mem_reuse = True
             session_options.intra_op_num_threads = os.cpu_count()
             session_options.inter_op_num_threads = os.cpu_count()
-            session_options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
             
     except Exception as e:
         logger.error(f"Error configuring CUDA: {e}")
@@ -149,26 +142,17 @@ def process_video_chunk(chunk_data):
     chunk_frames, source_face, start_idx = chunk_data
     processed_frames = []
     
-    try:
-        for frame in chunk_frames:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            target_faces = face_analyzer.get(frame_rgb)
-            
-            if len(target_faces) > 0:
-                for target_face in target_faces:
-                    if target_face.kps is not None:
-                        frame_rgb = swapper.get(frame_rgb, target_face, source_face, paste_back=True)
-            
-            frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-            processed_frames.append(frame_bgr)
-            
-            # Clear CUDA cache after each frame
-            if DEVICE_TYPE == "nvidia":
-                torch.cuda.empty_cache()
-                
-    except Exception as e:
-        logger.error(f"Error processing chunk: {e}")
-        raise e
+    for frame in chunk_frames:
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        target_faces = face_analyzer.get(frame_rgb)
+        
+        if len(target_faces) > 0:
+            for target_face in target_faces:
+                if target_face.kps is not None:
+                    frame_rgb = swapper.get(frame_rgb, target_face, source_face, paste_back=True)
+        
+        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        processed_frames.append(frame_bgr)
     
     return start_idx, processed_frames
 
@@ -194,10 +178,6 @@ async def swap_faces(
         cleanup_temp_files()
         model_path = ensure_model_exists()
         
-        # Clear CUDA cache before processing
-        if DEVICE_TYPE == "nvidia":
-            torch.cuda.empty_cache()
-            
         source_path = MEDIA_DIR / source_image.filename
         target_path = MEDIA_DIR / target_video.filename
         output_path = MEDIA_DIR / "output.mp4"
@@ -238,9 +218,8 @@ async def swap_faces(
             raise HTTPException(status_code=400, detail="No frames read from video")
         
         if DEVICE_TYPE == "nvidia":
-            # Calculate chunk size based on available memory
-            frame_memory = width * height * 3  # Approximate memory per frame
-            available_memory = 1.5 * 1024 * 1024 * 1024  # Reserve 1.5GB for model and processing
+            frame_memory = width * height * 3
+            available_memory = 2.5 * 1024 * 1024 * 1024
             chunk_size = int(available_memory / (frame_memory * 2.5))
             chunk_size = max(1, min(chunk_size, 30))
         else:
