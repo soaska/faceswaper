@@ -1,0 +1,35 @@
+FROM python:3.10-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libsm6 \
+    libxext6 \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages
+COPY requirements-cpu.txt .
+RUN pip3 install --no-cache-dir -r requirements-cpu.txt
+
+# Create working directory
+WORKDIR /app
+
+# Copy application files
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p temp/models temp/media temp/cache
+
+# Download model
+RUN wget https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx -O temp/models/inswapper_128.onnx
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV OMP_NUM_THREADS=4
+ENV MKL_NUM_THREADS=4
+
+# Run application
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"] 

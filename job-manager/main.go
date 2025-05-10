@@ -36,9 +36,51 @@ func processCircleJobs() {
 			continue
 		}
 
+		// Получаем Telegram ID владельца
+		ownerTGID, err := getOwnerTGID(task.Owner)
+		if err != nil {
+			log.Printf("Ошибка получения Telegram ID владельца для задачи %s: %v", task.ID, err)
+			continue
+		}
+
+		// Проверяем монеты
+		tgid, err := strconv.Atoi(ownerTGID)
+		if err != nil {
+			log.Printf("Ошибка преобразования telegram id в int: %v", err)
+			continue
+		}
+
+		userInfo, err := getUserInfo(tgid)
+		if err != nil {
+			log.Printf("Ошибка получения информации о пользователе: %v", err)
+			continue
+		}
+
+		currentCoins, ok := userInfo["coins"].(float64)
+		if !ok {
+			currentCoins = 0
+		}
+
+		if int(currentCoins) < 1 {
+			log.Printf("Недостаточно монет для задачи %s. Требуется: 1, доступно: %d", task.ID, int(currentCoins))
+			updateStatus("circle_jobs", task.ID, fmt.Sprintf("error: недостаточно монет. Требуется: 1, доступно: %d", int(currentCoins)))
+			sendErrorNotification(task.Owner, task.ID)
+			continue
+		}
+
+		// Списываем монеты
+		deductedAmount, err := checkAndDeductCoins(tgid, 1)
+		if err != nil {
+			log.Printf("Ошибка списания монет для задачи %s: %v", task.ID, err)
+			updateStatus("circle_jobs", task.ID, fmt.Sprintf("error: %v", err))
+			sendErrorNotification(task.Owner, task.ID)
+			continue
+		}
+
 		err = updateStatus("circle_jobs", task.ID, "processing")
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'processing' для задачи %s: %v", task.ID, err)
+			refundCoins(tgid, deductedAmount)
 			continue
 		}
 
@@ -47,12 +89,14 @@ func processCircleJobs() {
 			log.Printf("Ошибка обработки задачи %s: %v", task.ID, err)
 			updateStatus("circle_jobs", task.ID, fmt.Sprintf("error: %v", err))
 			sendErrorNotification(task.Owner, task.ID)
+			refundCoins(tgid, deductedAmount)
 			continue
 		}
 
 		err = updateStatus("circle_jobs", task.ID, "sending")
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'sending' для задачи %s: %v", task.ID, err)
+			refundCoins(tgid, deductedAmount)
 			continue
 		}
 
@@ -61,12 +105,19 @@ func processCircleJobs() {
 			log.Printf("Ошибка отправки для задачи %s: %v", task.ID, err)
 			updateStatus("circle_jobs", task.ID, fmt.Sprintf("error: %v", err))
 			sendErrorNotification(task.Owner, task.ID)
+			refundCoins(tgid, deductedAmount)
 			continue
 		}
 
 		err = updateStatus("circle_jobs", task.ID, "completed")
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'completed' для задачи %s: %v", task.ID, err)
+		}
+
+		// Увеличиваем счетчик кружков
+		err = incrementCircleCount(tgid)
+		if err != nil {
+			log.Printf("Ошибка обновления circle_count для владельца задачи %s: %v", task.ID, err)
 		}
 	}
 }
@@ -84,9 +135,51 @@ func processFaceSwapJobs() {
 			continue
 		}
 
+		// Получаем Telegram ID владельца
+		ownerTGID, err := getOwnerTGID(task.Owner)
+		if err != nil {
+			log.Printf("Ошибка получения Telegram ID владельца для задачи %s: %v", task.ID, err)
+			continue
+		}
+
+		// Проверяем монеты
+		tgid, err := strconv.Atoi(ownerTGID)
+		if err != nil {
+			log.Printf("Ошибка преобразования telegram id в int: %v", err)
+			continue
+		}
+
+		userInfo, err := getUserInfo(tgid)
+		if err != nil {
+			log.Printf("Ошибка получения информации о пользователе: %v", err)
+			continue
+		}
+
+		currentCoins, ok := userInfo["coins"].(float64)
+		if !ok {
+			currentCoins = 0
+		}
+
+		if int(currentCoins) < 5 {
+			log.Printf("Недостаточно монет для задачи %s. Требуется: 5, доступно: %d", task.ID, int(currentCoins))
+			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: недостаточно монет. Требуется: 5, доступно: %d", int(currentCoins)))
+			sendErrorNotification(task.Owner, task.ID)
+			continue
+		}
+
+		// Списываем монеты
+		deductedAmount, err := checkAndDeductCoins(tgid, 5)
+		if err != nil {
+			log.Printf("Ошибка списания монет для задачи %s: %v", task.ID, err)
+			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
+			sendErrorNotification(task.Owner, task.ID)
+			continue
+		}
+
 		err = updateStatus("face_jobs", task.ID, "processing")
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'processing' для задачи %s: %v", task.ID, err)
+			refundCoins(tgid, deductedAmount)
 			continue
 		}
 
@@ -95,6 +188,7 @@ func processFaceSwapJobs() {
 			log.Printf("Ошибка обработки задачи замены лиц %s: %v", task.ID, err)
 			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
 			sendErrorNotification(task.Owner, task.ID)
+			refundCoins(tgid, deductedAmount)
 			continue
 		}
 
@@ -102,6 +196,7 @@ func processFaceSwapJobs() {
 		err = updateStatus("face_jobs", task.ID, "sending")
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'sending' для задачи %s: %v", task.ID, err)
+			refundCoins(tgid, deductedAmount)
 			continue
 		}
 
@@ -112,12 +207,19 @@ func processFaceSwapJobs() {
 			log.Printf("Ошибка отправки видео пользователю для задачи %s: %v", task.ID, err)
 			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
 			sendErrorNotification(task.Owner, task.ID)
+			refundCoins(tgid, deductedAmount)
 			continue
 		}
 
 		err = updateStatus("face_jobs", task.ID, "completed")
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'completed' для задачи %s: %v", task.ID, err)
+		}
+
+		// Увеличиваем счетчик замен лиц
+		err = incrementFaceReplaceCount(tgid)
+		if err != nil {
+			log.Printf("Ошибка обновления face_replace_count для владельца задачи %s: %v", task.ID, err)
 		}
 
 		log.Printf("Задача замены лиц %s успешно обработана", task.ID)
@@ -182,7 +284,6 @@ func notifyCircleOwner(task *Task) error {
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	// Отправляем запрос
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -190,7 +291,6 @@ func notifyCircleOwner(task *Task) error {
 	}
 	defer resp.Body.Close()
 
-	// Проверяем ответ от Telegram API
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("ошибка чтения ответа Telegram API: %v", err)

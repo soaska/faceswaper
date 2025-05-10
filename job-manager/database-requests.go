@@ -112,6 +112,123 @@ func incrementCircleCount(tgUserID int) error {
 	return nil
 }
 
+// Увеличение face_replace_count на 1 для владельца задачи
+func incrementFaceReplaceCount(tgUserID int) error {
+	userInfo, err := getUserInfo(tgUserID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения информации о пользователе с Telegram ID %d: %v", tgUserID, err)
+	}
+	currentFaceReplaceCount, ok := userInfo["face_replace_count"].(float64)
+	if !ok {
+		currentFaceReplaceCount = 0
+	}
+
+	newFaceReplaceCount := int(currentFaceReplaceCount) + 1
+
+	updateData := map[string]interface{}{
+		"face_replace_count": newFaceReplaceCount,
+	}
+
+	userID, ok := userInfo["id"].(string)
+	if !ok {
+		return fmt.Errorf("не удалось извлечь ID пользователя с Telegram ID %d", tgUserID)
+	}
+
+	updateURL := fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID)
+
+	jsonData, err := json.Marshal(updateData)
+	if err != nil {
+		return fmt.Errorf("ошибка сериализации данных для обновления: %v", err)
+	}
+
+	_, err = sendAuthorizedRequest("PATCH", updateURL, jsonData)
+	if err != nil {
+		return fmt.Errorf("ошибка обновления face_replace_count для пользователя %s: %v", userID, err)
+	}
+
+	return nil
+}
+
+// Проверка и списание монет
+func checkAndDeductCoins(tgUserID int, cost int) (int, error) {
+	userInfo, err := getUserInfo(tgUserID)
+	if err != nil {
+		return 0, fmt.Errorf("ошибка получения информации о пользователе с Telegram ID %d: %v", tgUserID, err)
+	}
+
+	currentCoins, ok := userInfo["coins"].(float64)
+	if !ok {
+		currentCoins = 0
+	}
+
+	if int(currentCoins) < cost {
+		return 0, fmt.Errorf("недостаточно монет. Требуется: %d, доступно: %d", cost, int(currentCoins))
+	}
+
+	newCoins := int(currentCoins) - cost
+
+	updateData := map[string]interface{}{
+		"coins": newCoins,
+	}
+
+	userID, ok := userInfo["id"].(string)
+	if !ok {
+		return 0, fmt.Errorf("не удалось извлечь ID пользователя с Telegram ID %d", tgUserID)
+	}
+
+	updateURL := fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID)
+
+	jsonData, err := json.Marshal(updateData)
+	if err != nil {
+		return 0, fmt.Errorf("ошибка сериализации данных для обновления: %v", err)
+	}
+
+	_, err = sendAuthorizedRequest("PATCH", updateURL, jsonData)
+	if err != nil {
+		return 0, fmt.Errorf("ошибка обновления coins для пользователя %s: %v", userID, err)
+	}
+
+	return cost, nil
+}
+
+// Возврат монет пользователю
+func refundCoins(tgUserID int, amount int) error {
+	userInfo, err := getUserInfo(tgUserID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения информации о пользователе с Telegram ID %d: %v", tgUserID, err)
+	}
+
+	currentCoins, ok := userInfo["coins"].(float64)
+	if !ok {
+		currentCoins = 0
+	}
+
+	newCoins := int(currentCoins) + amount
+
+	updateData := map[string]interface{}{
+		"coins": newCoins,
+	}
+
+	userID, ok := userInfo["id"].(string)
+	if !ok {
+		return fmt.Errorf("не удалось извлечь ID пользователя с Telegram ID %d", tgUserID)
+	}
+
+	updateURL := fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID)
+
+	jsonData, err := json.Marshal(updateData)
+	if err != nil {
+		return fmt.Errorf("ошибка сериализации данных для обновления: %v", err)
+	}
+
+	_, err = sendAuthorizedRequest("PATCH", updateURL, jsonData)
+	if err != nil {
+		return fmt.Errorf("ошибка обновления coins для пользователя %s: %v", userID, err)
+	}
+
+	return nil
+}
+
 // Загрузка обработанного файла в output_media
 func uploadOutputMedia(collection, taskID, filePath string) error {
 	url := fmt.Sprintf("%s/api/collections/%s/records/%s", pocketBaseUrl, collection, taskID)
@@ -212,7 +329,7 @@ func fetchQueuedJobs(collection string) (*Task, error) {
 		return &response.Items[0], nil
 	}
 
-	return nil, nil // Нет задач в статусе "queued"
+	return nil, nil
 }
 
 // Обновление статуса задачи

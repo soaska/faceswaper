@@ -2,7 +2,7 @@ services:
   face-swap-api:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile-cpu
       target: base
     environment:
       - DEVICE_TYPE=cpu

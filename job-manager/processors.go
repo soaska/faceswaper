@@ -45,10 +45,30 @@ func processCircleTask(task *Task) error {
 	return nil
 }
 
+// Check face swap server health
+func checkFaceSwapHealth() error {
+	resp, err := http.Get(FaceSwapComponent_URL + "/health")
+	if err != nil {
+		return fmt.Errorf("ошибка проверки состояния сервера замены лиц: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("сервер замены лиц недоступен (статус %d)", resp.StatusCode)
+	}
+
+	return nil
+}
+
 // Обработка задачи замены лиц
 func processFaceSwapTask(task *Task) error {
 	if task.InputMedia == "" || task.SourceImage == "" {
 		return fmt.Errorf("задача с ID %s не содержит ссылок на input_media или source_image", task.ID)
+	}
+
+	// Проверяем состояние сервера замены лиц
+	if err := checkFaceSwapHealth(); err != nil {
+		return fmt.Errorf("server busy: %v", err)
 	}
 
 	cacheDir := "cache"

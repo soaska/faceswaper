@@ -2,8 +2,7 @@ services:
   face-swap-api:
     build:
       context: .
-      dockerfile: Dockerfile
-      target: nvidia
+      dockerfile: Dockerfile-cuda
     environment:
       - DEVICE_TYPE=nvidia
     restart: unless-stopped
@@ -11,6 +10,8 @@ services:
       - "7860:7860"
     volumes:
       - ./data:/app/temp
+      - ./data/models:/app/temp/models
+    runtime: nvidia
     deploy:
       resources:
         reservations:

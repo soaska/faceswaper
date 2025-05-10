@@ -1,0 +1,50 @@
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --allow-change-held-packages \
+    python3.10 \
+    python3-pip \
+    ffmpeg \
+    libsm6 \
+    libxext6 \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    wget \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install CUDA dependencies
+RUN apt-get update && apt-get install -y --allow-change-held-packages --no-install-recommends \
+    cuda-nvrtc-11-8 \
+    cuda-cudart-11-8 \
+    cuda-libraries-11-8 \
+    cuda-libraries-dev-11-8 \
+    libcudnn8 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages
+COPY requirements-cuda.txt .
+RUN pip3 install --no-cache-dir -r requirements-cuda.txt
+
+# Create working directory
+WORKDIR /app
+
+# Copy application files
+COPY . .
+
+# Create necessary directories
+RUN mkdir -p temp/models temp/media temp/cache
+
+# Download model
+RUN wget https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx -O temp/models/inswapper_128.onnx
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV CUDA_VISIBLE_DEVICES=0
+ENV OMP_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
+ENV DEVICE_TYPE=cuda
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH
+
+# Run application
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"] 
