@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
@@ -167,35 +168,65 @@ func getUserSession(userID int) *UserSession {
 // Хранилище сессий пользователей
 var userSessions = make(map[int]*UserSession)
 
+func initializeBot(BOT_TOKEN, BOT_ENDPOINT string) (*tgbotapi.BotAPI, error) {
+	var bot *tgbotapi.BotAPI
+	var err error
+	for retries := 0; retries < 5; retries++ {
+		// auth pocketbase
+		err = authenticatePocketBase()
+		if err != nil {
+			log.Printf("PocketBase auth failed (attempt %d/5): %v", retries+1, err)
+			time.Sleep(time.Duration(retries+1) * 5 * time.Second)
+			continue
+		}
+
+		// start the bot
+		bot, err = tgbotapi.NewBotAPIWithAPIEndpoint(BOT_TOKEN, BOT_ENDPOINT+`/bot%s/%s`)
+		if err != nil {
+			log.Printf("Bot init failed (attempt %d/5): %v", retries+1, err)
+			time.Sleep(time.Duration(retries+1) * 5 * time.Second)
+			continue
+		}
+		log.Printf("Authorized on account %s", bot.Self.UserName)
+		return bot, nil
+	}
+	return nil, fmt.Errorf("failed to initialize after 5 attempts: %v", err)
+}
+
 func main() {
 	// load variables
 	BOT_TOKEN, BOT_DEBUG, BOT_ENDPOINT := LoadEnvironment()
 
-	// auth pocketbase
-	err := authenticatePocketBase()
+	// Initialize bot
+	bot, err := initializeBot(BOT_TOKEN, BOT_ENDPOINT)
 	if err != nil {
-		panic(err)
+		log.Fatalf("Bot initialization failed: %v", err)
 	}
 
-	// start the bot
-	bot, err := tgbotapi.NewBotAPIWithAPIEndpoint(BOT_TOKEN, BOT_ENDPOINT+`/bot%s/%s`)
-	if err != nil {
-		panic(err)
-	} else {
-		log.Printf("Authorized on account %s", bot.Self.UserName)
-	}
 	if BOT_DEBUG {
 		bot.Debug = true
 		log.Print("bot in DEBUG mode")
 	}
 
-	// updates on telegram API
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
+	// Clean up any leftover user sessions on restart
+	userSessions = make(map[int]*UserSession)
+	log.Println("User sessions cleared on restart")
 
-	// Основной обработчик
-	updates := bot.GetUpdatesChan(u)
-	for update := range updates {
+	// updates on telegram API with recovery
+	for {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("Bot panic recovered: %v", r)
+				}
+			}()
+
+			u := tgbotapi.NewUpdate(0)
+			u.Timeout = 60
+
+			// Основной обработчик
+			updates := bot.GetUpdatesChan(u)
+			for update := range updates {
 		// Обработка нажатия на кнопку
 		if update.CallbackQuery != nil {
 			if update.CallbackQuery.Data == "reset_errors" {
@@ -332,7 +363,18 @@ func main() {
 			session.FaceFileID = "" // Сбрасываем временные данные в сессии
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Операция отменена.")
 			bot.Send(msg)
-			continue
+					continue
+				}
+			}
+		}()
+		log.Println("Bot connection lost, attempting restart...")
+		time.Sleep(30 * time.Second)
+		
+		// Reinitialize bot
+		bot, err = initializeBot(BOT_TOKEN, BOT_ENDPOINT)
+		if err != nil {
+			log.Printf("Bot restart failed: %v", err)
+			time.Sleep(60 * time.Second)
 		}
 	}
 }

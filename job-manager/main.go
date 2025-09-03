@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"time"
+	"context"
+	"os/signal"
+	"syscall"
 )
 
 // Task - структура для хранения данных задачи
@@ -24,16 +27,22 @@ type Task struct {
 }
 
 // Основной цикл обработки задач создания кружков
-func processCircleJobs() {
+func processCircleJobs(ctx context.Context) {
 	for {
-		task, err := fetchQueuedJobs("circle_jobs")
-		if err != nil {
-			log.Printf("Ошибка при получении задачи: %v", err)
-			continue
-		}
-		if task == nil {
-			wait()
-			continue
+		select {
+		case <-ctx.Done():
+			log.Println("Circle jobs processor shutting down...")
+			return
+		default:
+			task, err := fetchQueuedJobs("circle_jobs")
+			if err != nil {
+				log.Printf("Ошибка при получении задачи: %v", err)
+				continue
+			}
+			if task == nil {
+				wait()
+				continue
+			}
 		}
 
 		// Получаем Telegram ID владельца
@@ -123,16 +132,22 @@ func processCircleJobs() {
 }
 
 // processFaceSwapJobs основной цикл обработки задач замены лиц
-func processFaceSwapJobs() {
+func processFaceSwapJobs(ctx context.Context) {
 	for {
-		task, err := fetchQueuedJobs("face_jobs")
-		if err != nil {
-			log.Printf("Ошибка при получении задачи замены лиц: %v", err)
-			continue
-		}
-		if task == nil {
-			wait()
-			continue
+		select {
+		case <-ctx.Done():
+			log.Println("Face swap jobs processor shutting down...")
+			return
+		default:
+			task, err := fetchQueuedJobs("face_jobs")
+			if err != nil {
+				log.Printf("Ошибка при получении задачи замены лиц: %v", err)
+				continue
+			}
+			if task == nil {
+				wait()
+				continue
+			}
 		}
 
 		// Получаем Telegram ID владельца
@@ -318,16 +333,73 @@ func wait() {
 	<-time.After(10 * time.Second)
 }
 
+func cleanupTempFiles() {
+	cacheDir := "cache"
+	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
+		return
+	}
+	
+	files, err := filepath.Glob(filepath.Join(cacheDir, "*"))
+	if err != nil {
+		log.Printf("Error globbing cache files: %v", err)
+		return
+	}
+	
+	for _, file := range files {
+		if info, err := os.Stat(file); err == nil {
+			if time.Since(info.ModTime()) > time.Hour {
+				if err := os.Remove(file); err != nil {
+					log.Printf("Failed to remove old cache file %s: %v", file, err)
+				} else {
+					log.Printf("Removed old cache file: %s", file)
+				}
+			}
+		}
+	}
+}
+
+func initializeServices() error {
+	for retries := 0; retries < 5; retries++ {
+		err := authenticatePocketBase()
+		if err == nil {
+			log.Println("PocketBase authentication successful")
+			return nil
+		}
+		log.Printf("PocketBase auth failed (attempt %d/5): %v", retries+1, err)
+		time.Sleep(time.Duration(retries+1) * 5 * time.Second)
+	}
+	return fmt.Errorf("failed to authenticate after 5 attempts")
+}
+
 func main() {
 	BOT_TOKEN, _, BOT_ENDPOINT, FaceSwapComponent_URL = LoadEnvironment()
 
-	err := authenticatePocketBase()
-	if err != nil {
-		log.Fatalf("Ошибка аутентификации: %v", err)
+	// Cleanup old temp files on startup
+	cleanupTempFiles()
+
+	// Initialize services with retry
+	if err := initializeServices(); err != nil {
+		log.Fatalf("Service initialization failed: %v", err)
 	}
 
-	go processCircleJobs()
-	go processFaceSwapJobs()
+	// Create context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	select {}
+	// Handle graceful shutdown
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		log.Println("Received shutdown signal, gracefully shutting down...")
+		cancel()
+	}()
+
+	// Start processors with context
+	go processCircleJobs(ctx)
+	go processFaceSwapJobs(ctx)
+
+	// Wait for shutdown signal
+	<-ctx.Done()
+	log.Println("Job manager shut down complete")
 }
