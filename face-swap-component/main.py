@@ -358,9 +358,9 @@ async def swap_faces(
                     free_vram = available_vram - used_vram
                     
                     frame_memory = width * height * 3
-                    safety_factor = 0.6
-                    chunk_size = int((free_vram * safety_factor) / (frame_memory * 8))
-                    chunk_size = max(1, min(chunk_size, 50))
+                    safety_factor = 0.8
+                    chunk_size = int((free_vram * safety_factor) / (frame_memory * 4))
+                    chunk_size = max(1, min(chunk_size, 100))
                     
                     logger.info(f"VRAM: {free_vram/1024**3:.1f}GB free, chunk size: {chunk_size}")
                 except Exception as e:

@@ -1,6 +1,6 @@
 FROM python:3.10-slim
 
-# Install system dependencies
+# Install system dependencies and build tools
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libsm6 \
@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     libglx-mesa0 \
     libglib2.0-0 \
     wget \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages
