@@ -34,15 +34,16 @@ func processCircleJobs(ctx context.Context) {
 			log.Println("Circle jobs processor shutting down...")
 			return
 		default:
-			task, err := fetchQueuedJobs("circle_jobs")
-			if err != nil {
-				log.Printf("Ошибка при получении задачи: %v", err)
-				continue
-			}
-			if task == nil {
-				wait()
-				continue
-			}
+		}
+		
+		task, err := fetchQueuedJobs("circle_jobs")
+		if err != nil {
+			log.Printf("Ошибка при получении задачи: %v", err)
+			continue
+		}
+		if task == nil {
+			wait()
+			continue
 		}
 
 		// Получаем Telegram ID владельца
@@ -139,15 +140,16 @@ func processFaceSwapJobs(ctx context.Context) {
 			log.Println("Face swap jobs processor shutting down...")
 			return
 		default:
-			task, err := fetchQueuedJobs("face_jobs")
-			if err != nil {
-				log.Printf("Ошибка при получении задачи замены лиц: %v", err)
-				continue
-			}
-			if task == nil {
-				wait()
-				continue
-			}
+		}
+		
+		task, err := fetchQueuedJobs("face_jobs")
+		if err != nil {
+			log.Printf("Ошибка при получении задачи замены лиц: %v", err)
+			continue
+		}
+		if task == nil {
+			wait()
+			continue
 		}
 
 		// Получаем Telegram ID владельца
