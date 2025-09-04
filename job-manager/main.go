@@ -177,17 +177,17 @@ func processFaceSwapJobs(ctx context.Context) {
 			currentCoins = 0
 		}
 
-		if int(currentCoins) < 5 {
-			log.Printf("Недостаточно монет для задачи %s. Требуется: 5, доступно: %d", task.ID, int(currentCoins))
-			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: недостаточно монет. Требуется: 5, доступно: %d", int(currentCoins)))
+		if int(currentCoins) < 2 {
+			log.Printf("Недостаточно монет для задачи %s. Минимум требуется: 2, доступно: %d", task.ID, int(currentCoins))
+			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: недостаточно монет. Минимум требуется: 2, доступно: %d", int(currentCoins)))
 			sendErrorNotification(task.Owner, task.ID)
 			continue
 		}
 
-		// Списываем монеты
-		deductedAmount, err := checkAndDeductCoins(tgid, 5)
+		// Списываем базовые 2 монеты
+		baseAmount, err := checkAndDeductCoins(tgid, 2)
 		if err != nil {
-			log.Printf("Ошибка списания монет для задачи %s: %v", task.ID, err)
+			log.Printf("Ошибка списания базовых монет для задачи %s: %v", task.ID, err)
 			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
 			sendErrorNotification(task.Owner, task.ID)
 			continue
@@ -196,24 +196,64 @@ func processFaceSwapJobs(ctx context.Context) {
 		err = updateStatus("face_jobs", task.ID, "processing")
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'processing' для задачи %s: %v", task.ID, err)
-			refundCoins(tgid, deductedAmount)
+			refundCoins(tgid, baseAmount)
 			continue
 		}
 
-		err = processFaceSwapTask(task)
+		duration, err := processFaceSwapTask(task)
 		if err != nil {
 			log.Printf("Ошибка обработки задачи замены лиц %s: %v", task.ID, err)
 			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
 			sendErrorNotification(task.Owner, task.ID)
-			refundCoins(tgid, deductedAmount)
+			refundCoins(tgid, baseAmount)
 			continue
+		}
+
+		// Calculate additional cost based on processing time
+		additionalCost := duration / 20  // floor division
+		totalCost := 2 + additionalCost
+		
+		if totalCost > 30 {
+			totalCost = 30  // cap at 30 coins
+		}
+		
+		// Handle additional coins
+		additionalAmount := 0
+		finalAdditionalCost := additionalCost
+		if additionalCost > 0 {
+			// Try to deduct additional coins
+			additionalAmount, err = checkAndDeductCoins(tgid, additionalCost)
+			if err != nil {
+				// User can't pay additional cost - double it and force negative balance
+				finalAdditionalCost = additionalCost * 2
+				log.Printf("Пользователь не может доплатить %d монет за задачу %s, удваиваем до %d и разрешаем отрицательный баланс", additionalCost, task.ID, finalAdditionalCost)
+				
+				err = forceDeductCoins(tgid, finalAdditionalCost)
+				if err != nil {
+					log.Printf("Ошибка принудительного списания монет для задачи %s: %v", task.ID, err)
+					updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
+					sendErrorNotification(task.Owner, task.ID)
+					refundCoins(tgid, baseAmount)
+					continue
+				}
+				additionalAmount = finalAdditionalCost
+			}
+		}
+		
+		totalDeducted := baseAmount + additionalAmount
+		log.Printf("Задача %s обработана за %d секунд, списано %d монет (базовые: %d, за время: %d)", task.ID, duration, totalDeducted, baseAmount, additionalAmount)
+
+		// Update duration and price in database
+		err = updateTaskDurationAndPrice(task.ID, duration, totalDeducted)
+		if err != nil {
+			log.Printf("Предупреждение: Не удалось обновить длительность и цену для задачи %s: %v", task.ID, err)
 		}
 
 		// Устанавливаем статус sending перед отправкой
 		err = updateStatus("face_jobs", task.ID, "sending")
 		if err != nil {
 			log.Printf("Ошибка смены статуса на 'sending' для задачи %s: %v", task.ID, err)
-			refundCoins(tgid, deductedAmount)
+			refundCoins(tgid, totalDeducted)
 			continue
 		}
 
@@ -224,7 +264,7 @@ func processFaceSwapJobs(ctx context.Context) {
 			log.Printf("Ошибка отправки видео пользователю для задачи %s: %v", task.ID, err)
 			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
 			sendErrorNotification(task.Owner, task.ID)
-			refundCoins(tgid, deductedAmount)
+			refundCoins(tgid, totalDeducted)
 			continue
 		}
 
@@ -343,7 +383,7 @@ func cleanupTempFiles() {
 	
 	files, err := filepath.Glob(filepath.Join(cacheDir, "*"))
 	if err != nil {
-		log.Printf("Error globbing cache files: %v", err)
+		log.Printf("Ошибка поиска файлов кэша: %v", err)
 		return
 	}
 	
@@ -351,9 +391,9 @@ func cleanupTempFiles() {
 		if info, err := os.Stat(file); err == nil {
 			if time.Since(info.ModTime()) > time.Hour {
 				if err := os.Remove(file); err != nil {
-					log.Printf("Failed to remove old cache file %s: %v", file, err)
+					log.Printf("Не удалось удалить старый файл кэша %s: %v", file, err)
 				} else {
-					log.Printf("Removed old cache file: %s", file)
+					log.Printf("Удален старый файл кэша: %s", file)
 				}
 			}
 		}
@@ -364,13 +404,13 @@ func initializeServices() error {
 	for retries := 0; retries < 5; retries++ {
 		err := authenticatePocketBase()
 		if err == nil {
-			log.Println("PocketBase authentication successful")
+			log.Println("Авторизация PocketBase успешна")
 			return nil
 		}
-		log.Printf("PocketBase auth failed (attempt %d/5): %v", retries+1, err)
+		log.Printf("Ошибка авторизации PocketBase (попытка %d/5): %v", retries+1, err)
 		time.Sleep(time.Duration(retries+1) * 5 * time.Second)
 	}
-	return fmt.Errorf("failed to authenticate after 5 attempts")
+	return fmt.Errorf("не удалось авторизоваться после 5 попыток")
 }
 
 func main() {

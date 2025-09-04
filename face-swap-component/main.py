@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import os
 import shutil
 from pathlib import Path
@@ -16,6 +16,7 @@ import glob
 import magic
 from typing import Optional
 import threading
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -279,6 +280,7 @@ async def swap_faces(
     output_path = None
     target_vid = None
     out = None
+    start_time = time.time()
     try:
         with processing_lock:
             initialize_models()
@@ -445,11 +447,15 @@ async def swap_faces(
             if verify_result.returncode != 0:
                 raise HTTPException(status_code=500, detail="Output video is corrupted")
             
-            return FileResponse(
-                str(output_path),
-                media_type='video/mp4',
-                filename='output.mp4'
-            )
+            processing_duration = int(time.time() - start_time)
+            logger.info(f"Face swap completed in {processing_duration} seconds")
+            
+            return JSONResponse({
+                "video_path": str(output_path),
+                "duration_seconds": processing_duration,
+                "filename": "output.mp4",
+                "media_type": "video/mp4"
+            })
             
     except subprocess.TimeoutExpired:
         raise HTTPException(status_code=408, detail="Video processing timeout")

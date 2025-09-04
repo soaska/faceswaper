@@ -21,7 +21,10 @@ func authenticatePocketBase() error {
 		"password": password,
 	}
 
-	authDataJson, _ := json.Marshal(authData)
+	authDataJson, err := json.Marshal(authData)
+	if err != nil {
+		return fmt.Errorf("ошибка сериализации данных авторизации: %v", err)
+	}
 
 	authURL := fmt.Sprintf("%s/api/admins/auth-with-password", pocketBaseUrl)
 
@@ -32,12 +35,18 @@ func authenticatePocketBase() error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("ошибка чтения ответа при неудачной авторизации: %v", err)
+		}
 		return fmt.Errorf("авторизация не удалась, код %d, ответ: %s", resp.StatusCode, string(body))
 	}
 
 	// getting jwt
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("ошибка чтения тела ответа: %v", err)
+	}
 	var authResponse map[string]interface{}
 	if err := json.Unmarshal(body, &authResponse); err != nil {
 		return fmt.Errorf("ошибка разбора ответа: %v, ответ: %s", err, string(body))
@@ -86,7 +95,10 @@ func getOrCreateUser(tgUserID int, tgUsername string) (string, error) {
 		"face_replace_count": 0,
 		"coins":              200,
 	}
-	userDataJson, _ := json.Marshal(userData)
+	userDataJson, err := json.Marshal(userData)
+	if err != nil {
+		return "", fmt.Errorf("ошибка сериализации данных пользователя: %v", err)
+	}
 
 	createUserURL := fmt.Sprintf("%s/api/collections/users/records", pocketBaseUrl)
 	createResp, err := sendAuthorizedRequest("POST", createUserURL, userDataJson)
@@ -203,7 +215,10 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 	defer resp.Body.Close()
 
 	// Обрабатываем ответ
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("ошибка чтения ответа: %v", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("ошибка создания face job, код: %d, ответ: %s", resp.StatusCode, string(respBody))
 	}
@@ -290,7 +305,10 @@ func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID string) (str
 	defer resp.Body.Close()
 
 	// Обрабатываем ответ
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("ошибка чтения ответа: %v", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("ошибка создания face job, код: %d, ответ: %s", resp.StatusCode, string(respBody))
 	}
@@ -367,9 +385,12 @@ func updateStatus(collection, taskID, status string) error {
 	data := map[string]string{
 		"status": status,
 	}
-	jsonData, _ := json.Marshal(data)
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("ошибка сериализации данных для обновления статуса: %v", err)
+	}
 
-	_, err := sendAuthorizedRequest("PATCH", url, jsonData)
+	_, err = sendAuthorizedRequest("PATCH", url, jsonData)
 	if err != nil {
 		return fmt.Errorf("ошибка обновления статуса задачи: %v", err)
 	}

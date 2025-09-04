@@ -20,7 +20,10 @@ func authenticatePocketBase() error {
 		"password": password,
 	}
 
-	authDataJson, _ := json.Marshal(authData)
+	authDataJson, err := json.Marshal(authData)
+	if err != nil {
+		return fmt.Errorf("ошибка сериализации данных авторизации: %v", err)
+	}
 
 	authURL := fmt.Sprintf("%s/api/admins/auth-with-password", pocketBaseUrl)
 
@@ -31,12 +34,18 @@ func authenticatePocketBase() error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("ошибка чтения ответа при неудачной авторизации: %v", err)
+		}
 		return fmt.Errorf("авторизация не удалась, код %d, ответ: %s", resp.StatusCode, string(body))
 	}
 
 	// getting jwt
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("ошибка чтения тела ответа: %v", err)
+	}
 	var authResponse map[string]interface{}
 	if err := json.Unmarshal(body, &authResponse); err != nil {
 		return fmt.Errorf("ошибка разбора ответа: %v, ответ: %s", err, string(body))
@@ -191,7 +200,45 @@ func checkAndDeductCoins(tgUserID int, cost int) (int, error) {
 	return cost, nil
 }
 
-// Возврат монет пользователю
+// Force deduct coins even if it results in negative balance
+func forceDeductCoins(tgUserID int, cost int) error {
+	userInfo, err := getUserInfo(tgUserID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения информации о пользователе с Telegram ID %d: %v", tgUserID, err)
+	}
+
+	currentCoins, ok := userInfo["coins"].(float64)
+	if !ok {
+		currentCoins = 0
+	}
+
+	newCoins := int(currentCoins) - cost
+
+	updateData := map[string]interface{}{
+		"coins": newCoins,
+	}
+
+	userID, ok := userInfo["id"].(string)
+	if !ok {
+		return fmt.Errorf("не удалось извлечь ID пользователя с Telegram ID %d", tgUserID)
+	}
+
+	updateURL := fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID)
+
+	jsonData, err := json.Marshal(updateData)
+	if err != nil {
+		return fmt.Errorf("ошибка сериализации данных для обновления: %v", err)
+	}
+
+	_, err = sendAuthorizedRequest("PATCH", updateURL, jsonData)
+	if err != nil {
+		return fmt.Errorf("ошибка обновления coins для пользователя %s: %v", userID, err)
+	}
+
+	return nil
+}
+
+// Refund coins to user
 func refundCoins(tgUserID int, amount int) error {
 	userInfo, err := getUserInfo(tgUserID)
 	if err != nil {
@@ -275,7 +322,10 @@ func uploadOutputMedia(collection, taskID, filePath string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("ошибка чтения ответа при ошибке загрузки: %v", err)
+		}
 		return fmt.Errorf("ошибка загрузки файла: статус %d, ответ: %s", resp.StatusCode, string(respBody))
 	}
 
@@ -332,18 +382,42 @@ func fetchQueuedJobs(collection string) (*Task, error) {
 	return nil, nil
 }
 
-// Обновление статуса задачи
+// Update task status
 func updateStatus(collection, taskID, status string) error {
 	url := fmt.Sprintf("%s/api/collections/%s/records/%s", pocketBaseUrl, collection, taskID)
 
 	data := map[string]string{
 		"status": status,
 	}
-	jsonData, _ := json.Marshal(data)
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("ошибка сериализации данных для обновления статуса: %v", err)
+	}
 
-	_, err := sendAuthorizedRequest("PATCH", url, jsonData)
+	_, err = sendAuthorizedRequest("PATCH", url, jsonData)
 	if err != nil {
 		return fmt.Errorf("ошибка обновления статуса задачи: %v", err)
+	}
+
+	return nil
+}
+
+// Update duration and price for face_jobs task
+func updateTaskDurationAndPrice(taskID string, duration int, price int) error {
+	url := fmt.Sprintf("%s/api/collections/face_jobs/records/%s", pocketBaseUrl, taskID)
+
+	data := map[string]int{
+		"duration": duration,
+		"price":    price,
+	}
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("ошибка сериализации данных для обновления длительности и цены: %v", err)
+	}
+
+	_, err = sendAuthorizedRequest("PATCH", url, jsonData)
+	if err != nil {
+		return fmt.Errorf("ошибка обновления длительности и цены задачи: %v", err)
 	}
 
 	return nil

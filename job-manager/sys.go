@@ -164,7 +164,10 @@ func sendTelegramMessage(chatID string, message string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("ошибка чтения ответа Telegram API: %v", err)
+		}
 		return fmt.Errorf("ошибка в Telegram API. Код %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -221,7 +224,10 @@ func sendTelegramVideo(chatID string, filePath string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("ошибка чтения ответа при ошибке отправки видео: %v", err)
+		}
 		return fmt.Errorf("ошибка отправки видео: статус %d, ответ: %s", resp.StatusCode, string(respBody))
 	}
 

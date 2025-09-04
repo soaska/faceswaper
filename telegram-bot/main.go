@@ -68,20 +68,32 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 	if len(activeFaceJobs) > 0 {
 		response += "📋 Активные задачи замены лиц:\n"
 		for _, job := range activeFaceJobs {
-			// Пропускаем задачи со статусом "err cleared"
+			// Skip tasks with "err cleared" status
 			if status, ok := job["status"].(string); ok && strings.Contains(status, "err cleared") {
 				continue
 			}
-			response += fmt.Sprintf(
+			
+			// Build response text, including duration and price if available
+			responseText := fmt.Sprintf(
 				"🔹 Задача ID: %s\n"+
 					"   Статус: %s\n"+
 					"   Время: %s\n"+
-					"   Обновлена: %s\n\n",
+					"   Обновлена: %s\n",
 				job["id"],
 				job["status"],
 				job["created"],
 				job["updated"],
 			)
+			
+			// Add duration and price if available (for completed jobs)
+			if duration, ok := job["duration"].(float64); ok && duration > 0 {
+				responseText += fmt.Sprintf("   Длительность: %d сек\n", int(duration))
+			}
+			if price, ok := job["price"].(float64); ok && price > 0 {
+				responseText += fmt.Sprintf("   Цена: %d монет\n", int(price))
+			}
+			
+			response += responseText + "\n"
 		}
 	} else {
 		response += "У вас нет активных задач замены лиц.\n"
@@ -175,7 +187,7 @@ func initializeBot(BOT_TOKEN, BOT_ENDPOINT string) (*tgbotapi.BotAPI, error) {
 		// auth pocketbase
 		err = authenticatePocketBase()
 		if err != nil {
-			log.Printf("PocketBase auth failed (attempt %d/5): %v", retries+1, err)
+			log.Printf("Ошибка авторизации PocketBase (попытка %d/5): %v", retries+1, err)
 			time.Sleep(time.Duration(retries+1) * 5 * time.Second)
 			continue
 		}
@@ -183,14 +195,14 @@ func initializeBot(BOT_TOKEN, BOT_ENDPOINT string) (*tgbotapi.BotAPI, error) {
 		// start the bot
 		bot, err = tgbotapi.NewBotAPIWithAPIEndpoint(BOT_TOKEN, BOT_ENDPOINT+`/bot%s/%s`)
 		if err != nil {
-			log.Printf("Bot init failed (attempt %d/5): %v", retries+1, err)
+			log.Printf("Ошибка инициализации бота (попытка %d/5): %v", retries+1, err)
 			time.Sleep(time.Duration(retries+1) * 5 * time.Second)
 			continue
 		}
 		log.Printf("Authorized on account %s", bot.Self.UserName)
 		return bot, nil
 	}
-	return nil, fmt.Errorf("failed to initialize after 5 attempts: %v", err)
+	return nil, fmt.Errorf("не удалось инициализировать после 5 попыток: %v", err)
 }
 
 func main() {
@@ -373,7 +385,7 @@ func main() {
 		// Reinitialize bot
 		bot, err = initializeBot(BOT_TOKEN, BOT_ENDPOINT)
 		if err != nil {
-			log.Printf("Bot restart failed: %v", err)
+			log.Printf("Ошибка перезапуска бота: %v", err)
 			time.Sleep(60 * time.Second)
 		}
 	}
