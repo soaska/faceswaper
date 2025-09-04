@@ -1,307 +1,289 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
 import os
 import shutil
-from pathlib import Path
-import cv2
-import torch
-import insightface
-from insightface.app import FaceAnalysis
-import onnxruntime
-import logging
-import subprocess
-from concurrent.futures import ThreadPoolExecutor
-import numpy as np
-import glob
 import time
 import uuid
+import math
+import glob
+import logging
+import subprocess
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from typing import Tuple, List, Optional
 
-logging.basicConfig(level=logging.INFO)
+import cv2
+import torch
+import numpy as np
+import insightface
+import onnxruntime
+from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import JSONResponse
+from insightface.app import FaceAnalysis
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Face Swap API")
+# Initialize FastAPI app
+app = FastAPI(
+    title="Face Swap API",
+    description="Advanced face swapping service with GPU/CPU support",
+    version="2.0.0"
+)
 
+# Directory structure
 TEMP_DIR = Path("/temp")
 MODELS_DIR = TEMP_DIR / "models"
 MEDIA_DIR = TEMP_DIR / "media"
 CACHE_DIR = TEMP_DIR / "cache"
 
-# Create directories
-TEMP_DIR.mkdir(exist_ok=True)
-MODELS_DIR.mkdir(exist_ok=True)
-MEDIA_DIR.mkdir(exist_ok=True)
-CACHE_DIR.mkdir(exist_ok=True)
+# Ensure directories exist
+for directory in [TEMP_DIR, MODELS_DIR, MEDIA_DIR, CACHE_DIR]:
+    directory.mkdir(exist_ok=True)
 
-def initial_cleanup():
-    """
-    Выполняет начальную очистку при запуске - удаляет файлы старше недели из temp.
-    """
-    try:
-        if MEDIA_DIR.exists():
-            week_ago = time.time() - (7 * 24 * 60 * 60)  # 7 дней назад
-            for item in MEDIA_DIR.iterdir():
-                try:
-                    if item.is_file() and item.stat().st_mtime < week_ago:
-                        item.unlink()
-                        logger.info(f"Removed old startup file: {item.name}")
-                    elif item.is_dir() and item.stat().st_mtime < week_ago:
-                        shutil.rmtree(item)
-                        logger.info(f"Removed old startup directory: {item.name}")
-                except (OSError, FileNotFoundError) as e:
-                    logger.warning(f"Could not remove {item}: {e}")
-        logger.info("Initial cleanup completed - removed files older than 7 days")
-    except Exception as e:
-        logger.error(f"Initial cleanup failed: {e}")
-
-# Perform initial cleanup on startup
-initial_cleanup()
-
-def ensure_model_exists():
-    """
-    Проверяет наличие модели inswapper_128.onnx в директории MODELS_DIR.
-    """
-    model_path = MODELS_DIR / 'inswapper_128.onnx'
-    if not model_path.exists():
-        logger.error(f"Model not found at {model_path}")
-        raise RuntimeError(f"Model not found at {model_path}")
-    return model_path
-
-def setup_cache():
-    """
-    Настраивает кэш для InsightFace.
-    """
-    try:
-        os.environ['INSIGHTFACE_CACHE_DIR'] = str(CACHE_DIR)
-        logger.info(f"Using InsightFace cache directory: {CACHE_DIR}")
-        
-        test_file = CACHE_DIR / '.test'
-        test_file.touch()
-        test_file.unlink()
-        
-        return True
-    except Exception as e:
-        logger.error(f"Error setting up cache: {e}")
-        return False
-
-setup_cache()
-
+# Constants
+MODEL_NAME = "inswapper_128.onnx"
 DEVICE_TYPE = os.getenv("DEVICE_TYPE", "cpu").lower()
-if DEVICE_TYPE == "nvidia":
-    try:
-        if not torch.cuda.is_available():
-            logger.warning("CUDA is not available, falling back to CPU")
-            providers = ['CPUExecutionProvider']
-            ctx_id = -1
-        else:
-            cuda_device = torch.cuda.current_device()
-            cuda_memory = torch.cuda.get_device_properties(cuda_device).total_memory / 1024**3
-            logger.info(f"Using CUDA device with {cuda_memory:.2f}GB memory")
+WEEK_SECONDS = 7 * 24 * 60 * 60
+HOUR_SECONDS = 60 * 60
+
+
+class VideoProcessor:
+    """Advanced video processing with face swapping capabilities."""
+    
+    def __init__(self):
+        self._setup_cache()
+        self._initialize_models()
+        
+    def _setup_cache(self) -> bool:
+        """Configure InsightFace cache directory."""
+        try:
+            os.environ['INSIGHTFACE_CACHE_DIR'] = str(CACHE_DIR)
+            logger.info(f"Cache directory configured: {CACHE_DIR}")
+            
+            # Test cache accessibility
+            test_file = CACHE_DIR / '.test'
+            test_file.touch()
+            test_file.unlink()
+            return True
+        except Exception as e:
+            logger.error(f"Cache setup failed: {e}")
+            return False
+    
+    def _get_device_config(self) -> Tuple[List, int]:
+        """Configure device-specific settings for ONNX Runtime."""
+        if DEVICE_TYPE != "nvidia":
+            return ['CPUExecutionProvider'], -1
+            
+        try:
+            if not torch.cuda.is_available():
+                logger.warning("CUDA unavailable, falling back to CPU")
+                return ['CPUExecutionProvider'], -1
+                
+            device = torch.cuda.current_device()
+            memory_gb = torch.cuda.get_device_properties(device).total_memory / 1024**3
+            logger.info(f"CUDA device {device} with {memory_gb:.2f}GB memory")
             
             providers = [
                 ('CUDAExecutionProvider', {
-                    'device_id': cuda_device,
+                    'device_id': device,
                     'cudnn_conv_algo_search': 'EXHAUSTIVE',
                     'do_copy_in_default_stream': True
                 }),
                 'CPUExecutionProvider'
             ]
-            ctx_id = cuda_device
             
-            os.environ['CUDA_VISIBLE_DEVICES'] = str(cuda_device)
-            os.environ['OMP_NUM_THREADS'] = str(max(1, os.cpu_count() - 1))
-            os.environ['MKL_NUM_THREADS'] = str(max(1, os.cpu_count() - 1))
+            # Optimize threading for CUDA
+            os.environ.update({
+                'CUDA_VISIBLE_DEVICES': str(device),
+                'OMP_NUM_THREADS': str(max(1, os.cpu_count() - 1)),
+                'MKL_NUM_THREADS': str(max(1, os.cpu_count() - 1))
+            })
             
-    except Exception as e:
-        logger.error(f"Error configuring CUDA: {e}")
-        providers = ['CPUExecutionProvider']
-        ctx_id = -1
-else:
-    providers = ['CPUExecutionProvider']
-    ctx_id = -1
-
-# Настройки ONNX для всех режимов
-session_options = onnxruntime.SessionOptions()
-session_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
-session_options.enable_mem_pattern = True
-session_options.enable_mem_reuse = True
-session_options.intra_op_num_threads = max(1, os.cpu_count() - 1)
-session_options.inter_op_num_threads = max(1, os.cpu_count() - 1)
-
-face_analyzer = FaceAnalysis(
-    name='buffalo_l',
-    providers=providers,
-    session_options=session_options,
-    root=str(CACHE_DIR)
-)
-face_analyzer.prepare(ctx_id=ctx_id, det_size=(640, 640))
-
-MODEL_PATH = MODELS_DIR / 'inswapper_128.onnx'
-if not MODEL_PATH.exists():
-    raise RuntimeError(f"Model not found at {MODEL_PATH}")
-
-swapper = insightface.model_zoo.get_model(
-    str(MODEL_PATH),
-    providers=providers,
-    session_options=session_options
-)
-
-def process_video_chunk(chunk_data):
-    """
-    Обрабатывает чанк видео, заменяя лица в каждом кадре.
-    """
-    chunk_frames, source_face, start_idx = chunk_data
-    processed_frames = []
-    
-    logger.info(f"Processing chunk starting at frame {start_idx}, {len(chunk_frames)} frames")
-    
-    for i, frame in enumerate(chunk_frames):
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        target_faces = face_analyzer.get(frame_rgb)
-        
-        if len(target_faces) > 0:
-            for target_face in target_faces:
-                if target_face.kps is not None:
-                    frame_rgb = swapper.get(frame_rgb, target_face, source_face, paste_back=True)
-        
-        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-        processed_frames.append(frame_bgr)
-        
-        if (i + 1) % 10 == 0:  # Log every 10 frames
-            logger.info(f"Chunk {start_idx}: processed {i + 1}/{len(chunk_frames)} frames")
-    
-    logger.info(f"Completed chunk {start_idx}: {len(processed_frames)} frames processed")
-    return start_idx, processed_frames
-
-@app.post("/swap")
-async def swap_faces(
-    source_image: UploadFile = File(...),
-    target_video: UploadFile = File(...)
-):
-    """
-    Эндпоинт для замены лиц в видео.
-    
-    Args:
-        source_image (UploadFile): Изображение с исходным лицом
-        target_video (UploadFile): Видео, в котором нужно заменить лица
-        
-    Returns:
-        FileResponse: Обработанное видео с замененными лицами
-        
-    Raises:
-        HTTPException: При ошибках обработки файлов или недостаточном количестве лиц
-    """
-    start_time = time.time()
-    try:
-        model_path = ensure_model_exists()
-        
-        session_id = str(uuid.uuid4())[:8]
-        source_path = MEDIA_DIR / f"source_{session_id}_{source_image.filename}"
-        target_path = MEDIA_DIR / f"target_{session_id}_{target_video.filename}" 
-        output_path = MEDIA_DIR / f"output_{session_id}.mp4"
-        temp_output_path = MEDIA_DIR / f"temp_output_{session_id}.mp4"
-        
-        with open(source_path, "wb") as f:
-            shutil.copyfileobj(source_image.file, f)
-        with open(target_path, "wb") as f:
-            shutil.copyfileobj(target_video.file, f)
-
-        source_img = cv2.imread(str(source_path))
-        if source_img is None:
-            raise HTTPException(status_code=400, detail="Failed to load source image")
-        source_img = cv2.cvtColor(source_img, cv2.COLOR_BGR2RGB)
-        source_faces = face_analyzer.get(source_img)
-        if len(source_faces) == 0:
-            raise HTTPException(status_code=400, detail="No face detected in source image")
-        source_face = source_faces[0]
-
-        target_vid = cv2.VideoCapture(str(target_path))
-        if not target_vid.isOpened():
-            raise HTTPException(status_code=400, detail="Failed to open video")
+            return providers, device
             
-        width = int(target_vid.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(target_vid.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = target_vid.get(cv2.CAP_PROP_FPS)
+        except Exception as e:
+            logger.error(f"CUDA configuration failed: {e}")
+            return ['CPUExecutionProvider'], -1
+    
+    def _initialize_models(self):
+        """Initialize face analysis and swapping models."""
+        model_path = MODELS_DIR / MODEL_NAME
+        if not model_path.exists():
+            raise RuntimeError(f"Model not found: {model_path}")
+            
+        providers, ctx_id = self._get_device_config()
         
-        frames = []
-        while True:
-            ret, frame = target_vid.read()
-            if not ret:
-                break
-            frames.append(frame)
+        # Configure ONNX session options
+        session_options = onnxruntime.SessionOptions()
+        session_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+        session_options.enable_mem_pattern = True
+        session_options.enable_mem_reuse = True
+        session_options.intra_op_num_threads = max(1, os.cpu_count() - 1)
+        session_options.inter_op_num_threads = max(1, os.cpu_count() - 1)
         
-        target_vid.release()
+        # Initialize face analyzer
+        self.face_analyzer = FaceAnalysis(
+            name='buffalo_l',
+            providers=providers,
+            session_options=session_options,
+            root=str(CACHE_DIR)
+        )
+        self.face_analyzer.prepare(ctx_id=ctx_id, det_size=(640, 640))
         
-        if len(frames) == 0:
-            raise HTTPException(status_code=400, detail="No frames read from video")
+        # Initialize face swapper
+        self.swapper = insightface.model_zoo.get_model(
+            str(model_path),
+            providers=providers,
+            session_options=session_options
+        )
         
+        logger.info("Models initialized successfully")
+    
+    def _calculate_processing_params(self, width: int, height: int) -> Tuple[int, int]:
+        """Calculate optimal workers and chunk size based on device capabilities."""
         if DEVICE_TYPE == "nvidia":
             try:
-                # Получаем информацию о VRAM
                 total_vram = torch.cuda.get_device_properties(0).total_memory
-                used_vram = torch.cuda.memory_allocated(0)  
-                free_vram = total_vram - used_vram
-                free_vram_gb = free_vram / (1024**3)
+                used_vram = torch.cuda.memory_allocated(0)
+                free_vram_gb = (total_vram - used_vram) / (1024**3)
                 
                 logger.info(f"VRAM: {free_vram_gb:.2f}GB free, {used_vram/(1024**3):.2f}GB used")
                 
-                # Расчет количества потоков: 3GB на поток
-                vram_based_workers = max(1, int(free_vram_gb / 3.0))
-                max_workers = min(vram_based_workers, os.cpu_count(), 4)  # Ограничиваем максимум 4 потоками
-                
-                logger.info(f"Using {max_workers} workers based on VRAM ({vram_based_workers} VRAM-based, {os.cpu_count()} CPU cores)")
-                
-                # Предупреждение если VRAM слишком мало
                 if free_vram_gb < 2.0:
-                    logger.warning(f"Low VRAM detected ({free_vram_gb:.2f}GB free). Consider switching to CPU mode.")
+                    logger.warning(f"Low VRAM: {free_vram_gb:.2f}GB. Consider CPU mode.")
                 
-                # Расчет chunk_size на основе доступной памяти
-                frame_memory = width * height * 3  
-                safety_factor = 0.6  # Более консервативный подход
-                chunk_size = int((free_vram * safety_factor) / (frame_memory * max_workers * 4))
-                chunk_size = max(1, min(chunk_size, 20))  # Уменьшили максимум до 20
+                # 3GB VRAM per worker
+                vram_workers = max(1, int(free_vram_gb / 3.0))
+                max_workers = min(vram_workers, os.cpu_count(), 4)
+                
+                # Calculate chunk size based on available memory
+                frame_memory = width * height * 3
+                safety_factor = 0.6
+                chunk_size = int((total_vram * safety_factor) / (frame_memory * max_workers * 4))
+                chunk_size = max(1, min(chunk_size, 20))
+                
+                logger.info(f"GPU: {max_workers} workers, {chunk_size} frames/chunk")
+                return max_workers, chunk_size
                 
             except Exception as e:
-                logger.warning(f"Error calculating VRAM-based workers: {e}, falling back to defaults")
-                max_workers = 1
-                chunk_size = 10
+                logger.warning(f"GPU calculation failed: {e}")
+                return 1, 10
         else:
-            # Для CPU режима: cpu_count - 1 чтобы оставить ядро для системы
+            # CPU mode: reserve 1 core for system
             cpu_workers = max(1, os.cpu_count() - 1)
             max_workers = min(cpu_workers, 4)
             chunk_size = 30
             
-            logger.info(f"CPU mode: using {max_workers} workers (CPU cores: {os.cpu_count()}, reserved 1 for system)")
+            logger.info(f"CPU: {max_workers} workers, {chunk_size} frames/chunk")
+            return max_workers, chunk_size
+    
+    def _process_chunk(self, chunk_data: Tuple[List, object, int]) -> Tuple[int, List]:
+        """Process a chunk of video frames with face swapping."""
+        frames, source_face, start_idx = chunk_data
+        processed_frames = []
         
-        logger.info(f"Processing video with chunk size: {chunk_size} frames")
+        logger.info(f"Processing chunk {start_idx}: {len(frames)} frames")
         
+        for i, frame in enumerate(frames):
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            target_faces = self.face_analyzer.get(frame_rgb)
+            
+            # Apply face swapping if faces detected
+            for face in target_faces:
+                if face.kps is not None:
+                    frame_rgb = self.swapper.get(frame_rgb, face, source_face, paste_back=True)
+            
+            processed_frames.append(cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
+            
+            if (i + 1) % 10 == 0:
+                logger.info(f"Chunk {start_idx}: {i + 1}/{len(frames)} completed")
+        
+        logger.info(f"Chunk {start_idx} processing complete")
+        return start_idx, processed_frames
+    
+    def process_video(self, source_path: Path, target_path: Path, output_path: Path) -> int:
+        """Main video processing pipeline."""
+        # Load and validate source image
+        source_img = cv2.imread(str(source_path))
+        if source_img is None:
+            raise HTTPException(status_code=400, detail="Invalid source image")
+            
+        source_img_rgb = cv2.cvtColor(source_img, cv2.COLOR_BGR2RGB)
+        source_faces = self.face_analyzer.get(source_img_rgb)
+        
+        if not source_faces:
+            raise HTTPException(status_code=400, detail="No face detected in source image")
+        
+        source_face = source_faces[0]
+        
+        # Load and validate target video
+        video_capture = cv2.VideoCapture(str(target_path))
+        if not video_capture.isOpened():
+            raise HTTPException(status_code=400, detail="Invalid target video")
+        
+        # Extract video properties
+        width = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = video_capture.get(cv2.CAP_PROP_FPS)
+        
+        # Read all frames
+        frames = []
+        while True:
+            ret, frame = video_capture.read()
+            if not ret:
+                break
+            frames.append(frame)
+        
+        video_capture.release()
+        
+        if not frames:
+            raise HTTPException(status_code=400, detail="No frames found in video")
+        
+        logger.info(f"Processing {len(frames)} frames at {width}x{height}")
+        
+        # Calculate processing parameters
+        max_workers, chunk_size = self._calculate_processing_params(width, height)
+        
+        # Create processing chunks
         chunks = []
         for i in range(0, len(frames), chunk_size):
             chunk = frames[i:i + chunk_size]
             chunks.append((chunk, source_face, i))
         
+        # Process chunks in parallel
         processed_frames = [None] * len(frames)
-        logger.info(f"Starting video processing with {len(chunks)} chunks using {max_workers} workers")
-        
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(process_video_chunk, chunk) for chunk in chunks]
+            futures = [executor.submit(self._process_chunk, chunk) for chunk in chunks]
             for future in futures:
                 start_idx, chunk_frames = future.result()
                 processed_frames[start_idx:start_idx + len(chunk_frames)] = chunk_frames
         
+        # Write processed video
+        temp_output = output_path.parent / f"temp_{output_path.name}"
         fourcc = cv2.VideoWriter_fourcc(*'h264')
-        out = cv2.VideoWriter(str(temp_output_path), fourcc, fps, (width, height))
+        video_writer = cv2.VideoWriter(str(temp_output), fourcc, fps, (width, height))
         
         for frame in processed_frames:
-            out.write(frame)
-        out.release()
+            video_writer.write(frame)
+        video_writer.release()
         
-        if os.path.exists(output_path):
-            os.remove(output_path)
-            
+        # Add audio and optimize for compatibility
+        self._finalize_video(temp_output, target_path, output_path)
+        
+        return max_workers
+    
+    def _finalize_video(self, video_path: Path, audio_source: Path, output_path: Path):
+        """Combine video with original audio and optimize for compatibility."""
+        if output_path.exists():
+            output_path.unlink()
+        
         command = [
             'ffmpeg', '-y',
-            '-i', str(temp_output_path),
-            '-i', str(target_path),
+            '-i', str(video_path),
+            '-i', str(audio_source),
             '-c:v', 'libx264',
             '-preset', 'medium',
             '-crf', '23',
@@ -314,53 +296,156 @@ async def swap_faces(
         ]
         
         subprocess.run(command, check=True)
+
+
+class FileManager:
+    """Handle file operations and cleanup."""
+    
+    @staticmethod
+    def cleanup_old_files(directory: Path, max_age_seconds: int):
+        """Remove files older than specified age."""
+        if not directory.exists():
+            return
+            
+        cutoff_time = time.time() - max_age_seconds
+        removed_count = 0
         
+        for item in directory.iterdir():
+            try:
+                if item.stat().st_mtime < cutoff_time:
+                    if item.is_file():
+                        item.unlink()
+                    elif item.is_dir():
+                        shutil.rmtree(item)
+                    removed_count += 1
+            except (OSError, FileNotFoundError) as e:
+                logger.warning(f"Failed to remove {item}: {e}")
+        
+        if removed_count > 0:
+            logger.info(f"Removed {removed_count} old files from {directory}")
+    
+    @staticmethod
+    def generate_session_paths(session_id: str, source_filename: str, target_filename: str) -> Tuple[Path, Path, Path]:
+        """Generate unique file paths for a processing session."""
+        source_path = MEDIA_DIR / f"source_{session_id}_{source_filename}"
+        target_path = MEDIA_DIR / f"target_{session_id}_{target_filename}"
+        output_path = MEDIA_DIR / f"output_{session_id}.mp4"
+        return source_path, target_path, output_path
+
+
+# Initialize services
+file_manager = FileManager()
+processor = VideoProcessor()
+
+# Perform initial cleanup
+file_manager.cleanup_old_files(MEDIA_DIR, WEEK_SECONDS)
+
+# Log version information
+git_commit = os.getenv("GIT_COMMIT", "unknown")
+git_message = os.getenv("GIT_MESSAGE", "unknown")
+logger.info(f"🚀 Face Swap Component started")
+logger.info(f"📦 Version: {git_commit[:8]} - {git_message}")
+logger.info(f"🖥️  Device: {DEVICE_TYPE}")
+logger.info(f"📁 Temp dir: {TEMP_DIR}")
+
+
+@app.post("/swap")
+async def swap_faces(
+    source_image: UploadFile = File(..., description="Source face image"),
+    target_video: UploadFile = File(..., description="Target video for face replacement")
+):
+    """
+    Advanced face swapping endpoint with multi-threading and GPU optimization.
+    
+    Returns:
+        JSON response with video path, processing duration, and metadata
+    """
+    start_time = time.time()
+    session_id = str(uuid.uuid4())[:8]
+    
+    try:
+        # Clean up old files
+        file_manager.cleanup_old_files(MEDIA_DIR, HOUR_SECONDS)
+        
+        # Generate session file paths
+        source_path, target_path, output_path = file_manager.generate_session_paths(
+            session_id, source_image.filename, target_video.filename
+        )
+        
+        # Save uploaded files
+        with open(source_path, "wb") as f:
+            shutil.copyfileobj(source_image.file, f)
+        with open(target_path, "wb") as f:
+            shutil.copyfileobj(target_video.file, f)
+        
+        # Process video
+        max_workers = processor.process_video(source_path, target_path, output_path)
+        
+        # Calculate processing metrics
         processing_duration = int(time.time() - start_time)
         
         if DEVICE_TYPE == "nvidia":
             billable_duration = processing_duration * max_workers
-            logger.info(f"GPU: Face swap completed in {processing_duration} seconds using {max_workers} workers")
-            logger.info(f"Billable duration: {billable_duration} seconds (real: {processing_duration}s × {max_workers} workers)")
+            logger.info(f"GPU processing: {processing_duration}s × {max_workers} workers = {billable_duration}s billable")
         else:
-            import math
             billable_duration = math.ceil(processing_duration / 10)
-            logger.info(f"CPU: Face swap completed in {processing_duration} seconds using {max_workers} workers")
-            logger.info(f"Billable duration: {billable_duration} seconds (real: {processing_duration}s ÷ 10, rounded up)")
+            logger.info(f"CPU processing: {processing_duration}s ÷ 10 = {billable_duration}s billable")
         
-        logger.info(f"Processing completed. Total frames: {len(frames)}")
+        logger.info(f"Session {session_id} completed successfully")
         
         return JSONResponse({
             "video_path": str(output_path),
             "duration_seconds": billable_duration,
             "filename": "output.mp4",
-            "media_type": "video/mp4"
+            "media_type": "video/mp4",
+            "session_id": session_id,
+            "processing_time": processing_duration,
+            "workers_used": max_workers,
+            "device_type": DEVICE_TYPE
         })
         
     except Exception as e:
-        logger.error(f"Error processing video: {e}")
+        logger.error(f"Session {session_id} failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/health")
 async def health_check():
     """
-    Эндпоинт для проверки состояния сервиса.
-    
-    Returns:
-        dict: Информация о состоянии сервиса, включая тип устройства,
-              доступные провайдеры и версии используемых библиотек
-        
-    Raises:
-        HTTPException: При ошибках получения информации о состоянии
+    Service health check with detailed system information.
     """
     try:
+        git_commit = os.getenv("GIT_COMMIT", "unknown")
+        git_message = os.getenv("GIT_MESSAGE", "unknown")
+        
         device_info = {
             "status": "healthy",
             "device_type": DEVICE_TYPE,
-            "providers": [p[0] if isinstance(p, tuple) else p for p in providers],
+            "git_commit": git_commit,
+            "git_message": git_message,
+            "version": f"{git_commit[:8]} - {git_message}",
             "onnxruntime_version": onnxruntime.__version__,
-            "torch_version": torch.__version__
+            "torch_version": torch.__version__,
+            "model_loaded": (MODELS_DIR / MODEL_NAME).exists(),
+            "cache_directory": str(CACHE_DIR),
+            "temp_directory": str(TEMP_DIR)
         }
+        
+        if DEVICE_TYPE == "nvidia" and torch.cuda.is_available():
+            device_info.update({
+                "cuda_available": True,
+                "gpu_count": torch.cuda.device_count(),
+                "current_device": torch.cuda.current_device(),
+                "gpu_memory_gb": torch.cuda.get_device_properties(0).total_memory / 1024**3
+            })
+        
         return device_info
+        
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=7860)

@@ -29,11 +29,17 @@ RUN mkdir -p /temp/models /temp/media /temp/cache
 # Download model
 RUN wget https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx -O /temp/models/inswapper_128.onnx
 
+# Build arguments for version info
+ARG GIT_COMMIT=unknown
+ARG GIT_MESSAGE=unknown
+
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     OMP_NUM_THREADS=4 \
     MKL_NUM_THREADS=4 \
-    DEVICE_TYPE=cpu
+    DEVICE_TYPE=cpu \
+    GIT_COMMIT=${GIT_COMMIT} \
+    GIT_MESSAGE=${GIT_MESSAGE}
 
 # Run application
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"] 

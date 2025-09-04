@@ -9,7 +9,13 @@ import (
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
-// для обработки команды /status
+// Version info set at build time
+var (
+	GitCommit  = "unknown"
+	GitMessage = "unknown"
+)
+
+// Handle /status command
 func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 	tgUserID := int(update.Message.From.ID)
 	tgChatID := update.Message.Chat.ID
@@ -167,7 +173,7 @@ type UserSession struct {
 	FaceFileID string // временное хранение ID файла фотографии
 }
 
-// Функция для получения или создания сессии пользователя
+// Function to get or create user session
 func getUserSession(userID int) *UserSession {
 	if session, ok := userSessions[userID]; ok {
 		return session
@@ -206,6 +212,14 @@ func initializeBot(BOT_TOKEN, BOT_ENDPOINT string) (*tgbotapi.BotAPI, error) {
 }
 
 func main() {
+	// Log version information
+	commitShort := GitCommit
+	if len(GitCommit) > 8 {
+		commitShort = GitCommit[:8]
+	}
+	log.Printf("🤖 Telegram Bot started")
+	log.Printf("📦 Version: %s - %s", commitShort, GitMessage)
+	
 	// load variables
 	BOT_TOKEN, BOT_DEBUG, BOT_ENDPOINT := LoadEnvironment()
 
@@ -265,7 +279,7 @@ func main() {
 			continue
 		}
 
-		// Получаем сессию для текущего пользователя
+		// Get session for current user
 		session := getUserSession(int(userID))
 
 		// Приветственное сообщение
@@ -317,7 +331,7 @@ func main() {
 		// Обработка получения фотографии
 		if update.Message.Photo != nil {
 			fileID := update.Message.Photo[len(update.Message.Photo)-1].FileID
-			session.FaceFileID = fileID // сохраняем ID фото для текущего пользователя
+			session.FaceFileID = fileID // Save photo ID for current user
 
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Получена фотография. Пожалуйста, отправьте видео для замены лица.")
 			cancelMarkup := tgbotapi.NewReplyKeyboard(

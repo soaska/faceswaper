@@ -16,7 +16,13 @@ import (
 	"syscall"
 )
 
-// Task - структура для хранения данных задачи
+// Version info set at build time
+var (
+	GitCommit  = "unknown"
+	GitMessage = "unknown"
+)
+
+// Task - struct for storing task data
 type Task struct {
 	ID          string `json:"id"`
 	Owner       string `json:"owner"`
@@ -414,6 +420,14 @@ func initializeServices() error {
 }
 
 func main() {
+	// Log version information
+	commitShort := GitCommit
+	if len(GitCommit) > 8 {
+		commitShort = GitCommit[:8]
+	}
+	log.Printf("🚀 Job Manager started")
+	log.Printf("📦 Version: %s - %s", commitShort, GitMessage)
+	
 	BOT_TOKEN, _, BOT_ENDPOINT, FaceSwapComponent_URL = LoadEnvironment()
 
 	// Cleanup old temp files on startup

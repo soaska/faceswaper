@@ -24,17 +24,23 @@ RUN apt-get update && apt-get install -y --allow-change-held-packages \
 COPY requirements-cuda.txt .
 RUN pip3 install --no-cache-dir -r requirements-cuda.txt
 
+# Build arguments for version info
+ARG GIT_COMMIT=unknown
+ARG GIT_MESSAGE=unknown
+
 WORKDIR /app
 COPY . .
-RUN mkdir -p temp/models temp/media temp/cache
+RUN mkdir -p /temp/models /temp/media /temp/cache
 
-RUN wget https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx -O temp/models/inswapper_128.onnx
+RUN wget https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx -O /temp/models/inswapper_128.onnx
 
 ENV PYTHONUNBUFFERED=1 \
     CUDA_VISIBLE_DEVICES=0 \
     OMP_NUM_THREADS=1 \
     MKL_NUM_THREADS=1 \
-    DEVICE_TYPE=cuda \
-    LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH
+    DEVICE_TYPE=nvidia \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH \
+    GIT_COMMIT=${GIT_COMMIT} \
+    GIT_MESSAGE=${GIT_MESSAGE}
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"] 

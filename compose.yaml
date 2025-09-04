@@ -36,7 +36,7 @@ services:
   face-swap-component:
     build:
       context: ./face-swap-component
-      dockerfile: Dockerfile-nvidia
+      dockerfile: Dockerfile-cuda
     environment:
       - DEVICE_TYPE=nvidia
     ports:

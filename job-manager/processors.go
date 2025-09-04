@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 )
 
-// Обработка задачи создания кружка
+// Process circle creation task
 func processCircleTask(task *Task) error {
 	if task.InputMedia == "" {
 		return fmt.Errorf("задача с ID %s не содержит ссылки на input_media", task.ID)
@@ -61,13 +61,13 @@ func checkFaceSwapHealth() error {
 	return nil
 }
 
-// Обработка задачи замены лиц
+// Process face swap task
 func processFaceSwapTask(task *Task) (int, error) {
 	if task.InputMedia == "" || task.SourceImage == "" {
 		return 0, fmt.Errorf("задача с ID %s не содержит ссылок на input_media или source_image", task.ID)
 	}
 
-	// Проверяем состояние сервера замены лиц
+	// Check face swap server health
 	if err := checkFaceSwapHealth(); err != nil {
 		return 0, fmt.Errorf("сервер замены лиц занят: %v", err)
 	}
@@ -78,7 +78,7 @@ func processFaceSwapTask(task *Task) (int, error) {
 		return 0, fmt.Errorf("ошибка создания кэша: %v", err)
 	}
 
-	// Скачиваем исходные файлы
+	// Download source files
 	videoPath := filepath.Join(cacheDir, fmt.Sprintf("%s_input.mp4", task.ID))
 	imagePath := filepath.Join(cacheDir, fmt.Sprintf("%s_source.jpg", task.ID))
 	outputPath := filepath.Join(cacheDir, fmt.Sprintf("%s_output.mp4", task.ID))
@@ -96,13 +96,13 @@ func processFaceSwapTask(task *Task) (int, error) {
 		return 0, fmt.Errorf("ошибка скачивания изображения: %v", err)
 	}
 
-	// Обрабатываем через FaceSwapComponent
+	// Process through FaceSwapComponent
 	duration, err := processFaceSwapComponent(imagePath, videoPath, outputPath)
 	if err != nil {
 		return 0, fmt.Errorf("ошибка обработки FaceSwapComponent: %v", err)
 	}
 
-	// Загружаем результат обратно
+	// Upload result back
 	err = uploadOutputMedia("face_jobs", task.ID, outputPath)
 	if err != nil {
 		return 0, fmt.Errorf("ошибка загрузки результата в бд: %v", err)
@@ -117,11 +117,15 @@ type FaceSwapResponse struct {
 	DurationSeconds  int    `json:"duration_seconds"`
 	Filename         string `json:"filename"`
 	MediaType        string `json:"media_type"`
+	SessionID        string `json:"session_id"`
+	ProcessingTime   int    `json:"processing_time"`
+	WorkersUsed      int    `json:"workers_used"`
+	DeviceType       string `json:"device_type"`
 }
 
-// отправляем файлы в FaceSwapComponent и получаем результат
+// Send files to FaceSwapComponent and get result
 func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int, error) {
-	// Открываем файлы
+	// Open files
 	imageFile, err := os.Open(sourceImage)
 	if err != nil {
 		return 0, fmt.Errorf("ошибка открытия исходного изображения: %v", err)
@@ -134,7 +138,7 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int,
 	}
 	defer videoFile.Close()
 
-	// Создаем multipart запрос
+	// Create multipart request
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 
@@ -161,7 +165,7 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int,
 		return 0, fmt.Errorf("ошибка завершения multipart: %v", err)
 	}
 
-	// Отправляем запрос
+	// Send request
 	req, err := http.NewRequest("POST", FaceSwapComponent_URL+"/swap", body)
 	if err != nil {
 		return 0, fmt.Errorf("ошибка создания запроса к FaceSwapComponent: %v", err)
@@ -183,7 +187,7 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int,
 		return 0, fmt.Errorf("ошибка FaceSwapComponent, статус %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Читаем JSON ответ
+	// Read JSON response
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return 0, fmt.Errorf("ошибка чтения ответа: %v", err)
@@ -195,7 +199,10 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int,
 		return 0, fmt.Errorf("ошибка парсинга JSON ответа: %v", err)
 	}
 
-	// Копируем видео файл из временного пути в наш путь
+	log.Printf("FaceSwap обработка завершена: сессия %s, устройство %s, потоков %d, время %d сек", 
+		swapResponse.SessionID, swapResponse.DeviceType, swapResponse.WorkersUsed, swapResponse.ProcessingTime)
+
+	// Copy video file from temp path to our path
 	sourceVideoFile, err := os.Open(swapResponse.VideoPath)
 	if err != nil {
 		return 0, fmt.Errorf("ошибка открытия видео из ответа: %v", err)
@@ -213,7 +220,7 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int,
 		return 0, fmt.Errorf("ошибка копирования результата: %v", err)
 	}
 
-	// Проверяем, что файл создан и имеет размер
+	// Check that file is created and has size
 	fileInfo, err := outFile.Stat()
 	if err != nil {
 		return 0, fmt.Errorf("ошибка получения информации о файле: %v", err)
@@ -225,7 +232,7 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int,
 	return swapResponse.DurationSeconds, nil
 }
 
-// Обработка файла кружка
+// Process circle video file
 func processVideo(inputPath, outputPath string) error {
 	cmd := exec.Command(
 		"ffmpeg",
