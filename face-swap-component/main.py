@@ -263,7 +263,7 @@ class VideoProcessor:
         
         # Write processed video
         temp_output = output_path.parent / f"temp_{output_path.name}"
-        fourcc = cv2.VideoWriter_fourcc(*'h264')
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         video_writer = cv2.VideoWriter(str(temp_output), fourcc, fps, (width, height))
         
         for frame in processed_frames:
@@ -280,20 +280,38 @@ class VideoProcessor:
         if output_path.exists():
             output_path.unlink()
         
-        command = [
-            'ffmpeg', '-y',
-            '-i', str(video_path),
-            '-i', str(audio_source),
-            '-c:v', 'libx264',
-            '-preset', 'medium',
-            '-crf', '23',
-            '-c:a', 'aac',
-            '-b:a', '128k',
-            '-map', '0:v:0',
-            '-map', '1:a:0',
-            '-movflags', '+faststart',
-            str(output_path)
+        # Check if source video has audio stream
+        probe_command = [
+            'ffprobe', '-v', 'quiet', '-show_entries', 'stream=codec_type',
+            '-of', 'csv=p=0', str(audio_source)
         ]
+        
+        try:
+            probe_result = subprocess.run(probe_command, capture_output=True, text=True, check=True)
+            has_audio = 'audio' in probe_result.stdout
+        except subprocess.CalledProcessError:
+            has_audio = False
+        
+        if has_audio:
+            # Include audio from original video (copy video to avoid re-encoding)
+            command = [
+                'ffmpeg', '-y',
+                '-i', str(video_path),
+                '-i', str(audio_source),
+                '-c:v', 'copy',
+                '-c:a', 'aac',
+                '-map', '0:v:0',
+                '-map', '1:a:0',
+                str(output_path)
+            ]
+        else:
+            # Video only, no audio (copy video to avoid re-encoding)
+            command = [
+                'ffmpeg', '-y',
+                '-i', str(video_path),
+                '-c:v', 'copy',
+                str(output_path)
+            ]
         
         subprocess.run(command, check=True)
 
@@ -395,8 +413,8 @@ async def swap_faces(
         
         return JSONResponse({
             "video_path": str(output_path),
-            "duration_seconds": billable_duration,
-            "filename": "output.mp4",
+            "duration_seconds": processing_duration,
+            "filename": "output.mp4", 
             "media_type": "video/mp4",
             "session_id": session_id,
             "processing_time": processing_duration,
