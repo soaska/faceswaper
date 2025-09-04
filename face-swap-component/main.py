@@ -288,7 +288,7 @@ async def swap_faces(
                 start_idx, chunk_frames = future.result()
                 processed_frames[start_idx:start_idx + len(chunk_frames)] = chunk_frames
         
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        fourcc = cv2.VideoWriter_fourcc(*'h264')
         out = cv2.VideoWriter(str(temp_output_path), fourcc, fps, (width, height))
         
         for frame in processed_frames:
@@ -302,22 +302,36 @@ async def swap_faces(
             'ffmpeg', '-y',
             '-i', str(temp_output_path),
             '-i', str(target_path),
-            '-c:v', 'copy',
+            '-c:v', 'libx264',
+            '-preset', 'medium',
+            '-crf', '23',
             '-c:a', 'aac',
+            '-b:a', '128k',
             '-map', '0:v:0',
             '-map', '1:a:0',
+            '-movflags', '+faststart',
             str(output_path)
         ]
         
         subprocess.run(command, check=True)
         
         processing_duration = int(time.time() - start_time)
-        logger.info(f"Face swap completed in {processing_duration} seconds")
+        
+        if DEVICE_TYPE == "nvidia":
+            billable_duration = processing_duration * max_workers
+            logger.info(f"GPU: Face swap completed in {processing_duration} seconds using {max_workers} workers")
+            logger.info(f"Billable duration: {billable_duration} seconds (real: {processing_duration}s × {max_workers} workers)")
+        else:
+            import math
+            billable_duration = math.ceil(processing_duration / 10)
+            logger.info(f"CPU: Face swap completed in {processing_duration} seconds using {max_workers} workers")
+            logger.info(f"Billable duration: {billable_duration} seconds (real: {processing_duration}s ÷ 10, rounded up)")
+        
         logger.info(f"Processing completed. Total frames: {len(frames)}")
         
         return JSONResponse({
             "video_path": str(output_path),
-            "duration_seconds": processing_duration,
+            "duration_seconds": billable_duration,
             "filename": "output.mp4",
             "media_type": "video/mp4"
         })
