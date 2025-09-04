@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --allow-change-held-packages \
     cuda-libraries-11-8 \
     cuda-libraries-dev-11-8 \
     libcudnn8 \
+    libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements-cuda.txt .
