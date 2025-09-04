@@ -69,7 +69,7 @@ func processFaceSwapTask(task *Task) (int, error) {
 
 	// Проверяем состояние сервера замены лиц
 	if err := checkFaceSwapHealth(); err != nil {
-		return 0, fmt.Errorf("server busy: %v", err)
+		return 0, fmt.Errorf("сервер замены лиц занят: %v", err)
 	}
 
 	cacheDir := "cache"

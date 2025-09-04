@@ -31,7 +31,7 @@ func processCircleJobs(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Circle jobs processor shutting down...")
+			log.Println("Процессор задач создания кружков завершает работу...")
 			return
 		default:
 		}
@@ -137,7 +137,7 @@ func processFaceSwapJobs(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Face swap jobs processor shutting down...")
+			log.Println("Процессор задач замены лиц завершает работу...")
 			return
 		default:
 		}
@@ -421,7 +421,7 @@ func main() {
 
 	// Initialize services with retry
 	if err := initializeServices(); err != nil {
-		log.Fatalf("Service initialization failed: %v", err)
+		log.Fatalf("Ошибка инициализации сервисов: %v", err)
 	}
 
 	// Create context for graceful shutdown
@@ -433,7 +433,7 @@ func main() {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
-		log.Println("Received shutdown signal, gracefully shutting down...")
+		log.Println("Получен сигнал остановки, корректно завершаем работу...")
 		cancel()
 	}()
 
@@ -443,5 +443,5 @@ func main() {
 
 	// Wait for shutdown signal
 	<-ctx.Done()
-	log.Println("Job manager shut down complete")
+	log.Println("Менеджер задач завершил работу")
 }

@@ -25,9 +25,13 @@
 - Взаимодействие с FaceSwap API
 - Отправка результатов пользователям
 
-### 3. FaceSwap API (`faceswap-api/`)
-- Обработка видео для замены лиц
-- Создание кружков из видео
+### 3. Face Swap Component (`face-swap-component/`)
+- Обработка видео для замены лиц на основе InsightFace
+- Поддержка CPU и NVIDIA GPU (CUDA)  
+- Многопоточная обработка с автоматическим расчетом нагрузки
+- Временные файлы в `/temp` контейнера
+- Автоматическая очистка при запуске
+- JSON API для интеграции с job-manager
 
 ### 4. PocketBase (`pocketbase/`)
 - База данных и API для хранения:
@@ -155,7 +159,14 @@ docker compose -f face-swap-component/compose.nvidia.yaml up --build
 - `target_video`: Видео, в котором нужно заменить лица
 
 Ответ:
-- Видео с замененными лицами в формате MP4
+```json
+{
+    "video_path": "/temp/media/output_abc123.mp4",
+    "duration_seconds": 42,
+    "filename": "output.mp4", 
+    "media_type": "video/mp4"
+}
+```
 
 #### GET /health
 Проверка состояния сервиса

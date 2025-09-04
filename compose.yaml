@@ -33,6 +33,26 @@ services:
       timeout: 10s
       retries: 5
 
+  face-swap-component:
+    build:
+      context: ./face-swap-component
+      dockerfile: Dockerfile-nvidia
+    environment:
+      - DEVICE_TYPE=nvidia
+    ports:
+      - "7860:7860"
+    restart: unless-stopped
+    volumes:
+      - ./temp:/temp
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
   job-manager:
     build:
       context: ./job-manager
@@ -42,9 +62,12 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    volumes:
+      - ./temp:/temp
     depends_on:
       - pocketbase
       - telegram-bot-api
+      - face-swap-component
 
   telegram-bot:
     build:

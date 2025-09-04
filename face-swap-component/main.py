@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Face Swap API")
 
-TEMP_DIR = Path("temp")
+TEMP_DIR = Path("/temp")
 MODELS_DIR = TEMP_DIR / "models"
 MEDIA_DIR = TEMP_DIR / "media"
 CACHE_DIR = TEMP_DIR / "cache"

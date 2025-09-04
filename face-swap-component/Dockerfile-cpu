@@ -24,10 +24,10 @@ WORKDIR /app
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p temp/models temp/media temp/cache
+RUN mkdir -p /temp/models /temp/media /temp/cache
 
 # Download model
-RUN wget https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx -O temp/models/inswapper_128.onnx
+RUN wget https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx -O /temp/models/inswapper_128.onnx
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
