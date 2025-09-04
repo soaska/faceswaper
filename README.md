@@ -148,6 +148,11 @@ docker compose -f face-swap-component/compose.cpu.yaml up --build
 docker compose -f face-swap-component/compose.nvidia.yaml up --build
 ```
 
+### Переменные окружения
+
+- `DEVICE_TYPE`: Тип устройства (`cpu`, `nvidia`)
+- `THREADS`: Количество потоков для обработки (0 = автоматический расчет)
+
 
 ### API Endpoints
 

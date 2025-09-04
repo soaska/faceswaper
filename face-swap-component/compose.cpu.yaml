@@ -6,6 +6,7 @@ services:
       target: base
     environment:
       - DEVICE_TYPE=cpu
+      - THREADS=0
     restart: unless-stopped
     ports:
       - "7860:7860"

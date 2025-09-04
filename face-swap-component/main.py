@@ -144,6 +144,17 @@ class VideoProcessor:
     
     def _calculate_processing_params(self, width: int, height: int) -> Tuple[int, int]:
         """Calculate optimal workers and chunk size based on device capabilities."""
+        # Check for environment variable override
+        threads_override = os.getenv("THREADS", "0")
+        try:
+            threads_env = int(threads_override)
+            if threads_env > 0:
+                logger.info(f"Using threads override from environment: {threads_env}")
+                chunk_size = 20 if DEVICE_TYPE == "nvidia" else 30
+                return threads_env, chunk_size
+        except ValueError:
+            logger.warning(f"Invalid THREADS environment value: {threads_override}, ignoring")
+        
         if DEVICE_TYPE == "nvidia":
             try:
                 total_vram = torch.cuda.get_device_properties(0).total_memory
@@ -155,8 +166,8 @@ class VideoProcessor:
                 if free_vram_gb < 2.0:
                     logger.warning(f"Low VRAM: {free_vram_gb:.2f}GB. Consider CPU mode.")
                 
-                # 3GB VRAM per worker
-                vram_workers = max(1, int(free_vram_gb / 3.0))
+                # 2GB VRAM per worker
+                vram_workers = max(1, int(free_vram_gb / 2.0))
                 max_workers = min(vram_workers, os.cpu_count(), 4)
                 
                 # Calculate chunk size based on available memory
