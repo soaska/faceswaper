@@ -34,21 +34,22 @@ CACHE_DIR.mkdir(exist_ok=True)
 
 def initial_cleanup():
     """
-    Выполняет начальную очистку при запуске - удаляет все файлы из temp.
+    Выполняет начальную очистку при запуске - удаляет файлы старше недели из temp.
     """
     try:
         if MEDIA_DIR.exists():
+            week_ago = time.time() - (7 * 24 * 60 * 60)  # 7 дней назад
             for item in MEDIA_DIR.iterdir():
                 try:
-                    if item.is_file():
+                    if item.is_file() and item.stat().st_mtime < week_ago:
                         item.unlink()
-                        logger.info(f"Removed startup file: {item.name}")
-                    elif item.is_dir():
+                        logger.info(f"Removed old startup file: {item.name}")
+                    elif item.is_dir() and item.stat().st_mtime < week_ago:
                         shutil.rmtree(item)
-                        logger.info(f"Removed startup directory: {item.name}")
+                        logger.info(f"Removed old startup directory: {item.name}")
                 except (OSError, FileNotFoundError) as e:
                     logger.warning(f"Could not remove {item}: {e}")
-        logger.info("Initial cleanup completed successfully")
+        logger.info("Initial cleanup completed - removed files older than 7 days")
     except Exception as e:
         logger.error(f"Initial cleanup failed: {e}")
 
@@ -100,7 +101,6 @@ def setup_cache():
         return False
 
 setup_cache()
-cleanup_temp_files()
 
 DEVICE_TYPE = os.getenv("DEVICE_TYPE", "cpu").lower()
 if DEVICE_TYPE == "nvidia":
@@ -209,7 +209,6 @@ async def swap_faces(
     """
     start_time = time.time()
     try:
-        cleanup_temp_files()
         model_path = ensure_model_exists()
         
         session_id = str(uuid.uuid4())[:8]
@@ -343,8 +342,6 @@ async def swap_faces(
     except Exception as e:
         logger.error(f"Error processing video: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        cleanup_temp_files()
 
 @app.get("/health")
 async def health_check():
