@@ -293,7 +293,7 @@ func notifyCircleOwner(task *Task) error {
 		return fmt.Errorf("ошибка закрытия записи multipart данных: %v", err)
 	}
 
-	url := fmt.Sprintf("%s/bot%s/sendVideoNote", BOT_ENDPOINT, os.Getenv("TELEGRAM_APITOKEN"))
+	url := fmt.Sprintf("%s/bot%s/sendVideoNote", BOT_ENDPOINT, BOT_TOKEN)
 
 	req, err := http.NewRequest("POST", url, body)
 	if err != nil {
