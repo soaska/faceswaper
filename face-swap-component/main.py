@@ -48,10 +48,6 @@ def safe_mkdir_and_cleanup(path: Path):
         logger.error(f"Error setting up directory {path}: {e}")
         raise
 
-safe_mkdir_and_cleanup(TEMP_DIR)
-safe_mkdir_and_cleanup(MODELS_DIR)
-safe_mkdir_and_cleanup(MEDIA_DIR)
-safe_mkdir_and_cleanup(CACHE_DIR)
 
 MAX_FILE_SIZE = 100 * 1024 * 1024
 MAX_VIDEO_DURATION = 300
@@ -148,11 +144,38 @@ def setup_cache():
         logger.error(f"Error setting up cache: {e}")
         return False
 
+def initial_cleanup():
+    """
+    Выполняет начальную очистку при запуске сервиса.
+    """
+    try:
+        # Создаем директории если их нет
+        for directory in [TEMP_DIR, MODELS_DIR, MEDIA_DIR, CACHE_DIR]:
+            directory.mkdir(exist_ok=True)
+        
+        # Полная очистка media директории при запуске
+        if MEDIA_DIR.exists():
+            for item in MEDIA_DIR.iterdir():
+                try:
+                    if item.is_file():
+                        item.unlink()
+                        logger.info(f"Removed startup file: {item.name}")
+                    elif item.is_dir():
+                        shutil.rmtree(item)
+                        logger.info(f"Removed startup directory: {item.name}")
+                except (OSError, FileNotFoundError) as e:
+                    logger.warning(f"Could not remove {item}: {e}")
+        
+        logger.info("Initial cleanup completed successfully")
+    except Exception as e:
+        logger.error(f"Initial cleanup failed: {e}")
+        raise RuntimeError(f"Failed to initialize service: {e}")
+
 try:
     setup_cache()
-    cleanup_temp_files(force=True)
+    initial_cleanup()
 except Exception as e:
-    logger.error(f"Startup cleanup failed: {e}")
+    logger.error(f"Startup initialization failed: {e}")
     raise RuntimeError(f"Failed to initialize service: {e}")
 
 session_options = onnxruntime.SessionOptions()
