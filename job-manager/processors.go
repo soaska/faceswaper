@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -113,14 +114,14 @@ func processFaceSwapTask(task *Task) (int, error) {
 
 // Face swap response structure
 type FaceSwapResponse struct {
-	VideoPath        string `json:"video_path"`
-	DurationSeconds  int    `json:"duration_seconds"`
-	Filename         string `json:"filename"`
-	MediaType        string `json:"media_type"`
-	SessionID        string `json:"session_id"`
-	ProcessingTime   int    `json:"processing_time"`
-	WorkersUsed      int    `json:"workers_used"`
-	DeviceType       string `json:"device_type"`
+	VideoPath       string `json:"video_path"`
+	DurationSeconds int    `json:"duration_seconds"`
+	Filename        string `json:"filename"`
+	MediaType       string `json:"media_type"`
+	SessionID       string `json:"session_id"`
+	ProcessingTime  int    `json:"processing_time"`
+	WorkersUsed     int    `json:"workers_used"`
+	DeviceType      string `json:"device_type"`
 }
 
 // Send files to FaceSwapComponent and get result
@@ -199,7 +200,7 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int,
 		return 0, fmt.Errorf("ошибка парсинга JSON ответа: %v", err)
 	}
 
-	log.Printf("FaceSwap обработка завершена: сессия %s, устройство %s, потоков %d, время %d сек", 
+	log.Printf("FaceSwap обработка завершена: сессия %s, устройство %s, потоков %d, время %d сек",
 		swapResponse.SessionID, swapResponse.DeviceType, swapResponse.WorkersUsed, swapResponse.ProcessingTime)
 
 	// Copy video file from temp path to our path
