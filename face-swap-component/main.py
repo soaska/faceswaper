@@ -56,28 +56,6 @@ def initial_cleanup():
 # Perform initial cleanup on startup
 initial_cleanup()
 
-def cleanup_temp_files():
-    """
-    Очищает старые временные файлы из директории MEDIA_DIR (старше часа).
-    """
-    try:
-        hour_ago = time.time() - (60 * 60)  # час назад
-        for file_path in glob.glob(str(MEDIA_DIR / "*")):
-            try:
-                file_stat = os.stat(file_path)
-                if file_stat.st_mtime < hour_ago:
-                    if os.path.isfile(file_path):
-                        os.remove(file_path)
-                        logger.info(f"Removed old file: {os.path.basename(file_path)}")
-                    elif os.path.isdir(file_path):
-                        shutil.rmtree(file_path)
-                        logger.info(f"Removed old directory: {os.path.basename(file_path)}")
-            except Exception as e:
-                logger.warning(f"Failed to remove {file_path}: {e}")
-        logger.info("Old temporary media files cleaned up successfully")
-    except Exception as e:
-        logger.error(f"Error during cleanup: {e}")
-
 def ensure_model_exists():
     """
     Проверяет наличие модели inswapper_128.onnx в директории MODELS_DIR.
@@ -214,7 +192,6 @@ async def swap_faces(
     """
     start_time = time.time()
     try:
-        cleanup_temp_files()
         model_path = ensure_model_exists()
         
         session_id = str(uuid.uuid4())[:8]
