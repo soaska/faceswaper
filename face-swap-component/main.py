@@ -125,15 +125,8 @@ if DEVICE_TYPE == "nvidia":
             ctx_id = cuda_device
             
             os.environ['CUDA_VISIBLE_DEVICES'] = str(cuda_device)
-            os.environ['OMP_NUM_THREADS'] = str(os.cpu_count())
-            os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
-            
-            session_options = onnxruntime.SessionOptions()
-            session_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
-            session_options.enable_mem_pattern = True
-            session_options.enable_mem_reuse = True
-            session_options.intra_op_num_threads = os.cpu_count()
-            session_options.inter_op_num_threads = os.cpu_count()
+            os.environ['OMP_NUM_THREADS'] = str(max(1, os.cpu_count() - 1))
+            os.environ['MKL_NUM_THREADS'] = str(max(1, os.cpu_count() - 1))
             
     except Exception as e:
         logger.error(f"Error configuring CUDA: {e}")
@@ -142,6 +135,14 @@ if DEVICE_TYPE == "nvidia":
 else:
     providers = ['CPUExecutionProvider']
     ctx_id = -1
+
+# Настройки ONNX для всех режимов
+session_options = onnxruntime.SessionOptions()
+session_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
+session_options.enable_mem_pattern = True
+session_options.enable_mem_reuse = True
+session_options.intra_op_num_threads = max(1, os.cpu_count() - 1)
+session_options.inter_op_num_threads = max(1, os.cpu_count() - 1)
 
 face_analyzer = FaceAnalysis(
     name='buffalo_l',
@@ -252,12 +253,42 @@ async def swap_faces(
             raise HTTPException(status_code=400, detail="No frames read from video")
         
         if DEVICE_TYPE == "nvidia":
-            frame_memory = width * height * 3
-            available_memory = 2.5 * 1024 * 1024 * 1024
-            chunk_size = int(available_memory / (frame_memory * 2.5))
-            chunk_size = max(1, min(chunk_size, 30))
+            try:
+                # Получаем информацию о VRAM
+                total_vram = torch.cuda.get_device_properties(0).total_memory
+                used_vram = torch.cuda.memory_allocated(0)  
+                free_vram = total_vram - used_vram
+                free_vram_gb = free_vram / (1024**3)
+                
+                logger.info(f"VRAM: {free_vram_gb:.2f}GB free, {used_vram/(1024**3):.2f}GB used")
+                
+                # Расчет количества потоков: 3GB на поток
+                vram_based_workers = max(1, int(free_vram_gb / 3.0))
+                max_workers = min(vram_based_workers, os.cpu_count(), 4)  # Ограничиваем максимум 4 потоками
+                
+                logger.info(f"Using {max_workers} workers based on VRAM ({vram_based_workers} VRAM-based, {os.cpu_count()} CPU cores)")
+                
+                # Предупреждение если VRAM слишком мало
+                if free_vram_gb < 2.0:
+                    logger.warning(f"Low VRAM detected ({free_vram_gb:.2f}GB free). Consider switching to CPU mode.")
+                
+                # Расчет chunk_size на основе доступной памяти
+                frame_memory = width * height * 3  
+                safety_factor = 0.6  # Более консервативный подход
+                chunk_size = int((free_vram * safety_factor) / (frame_memory * max_workers * 4))
+                chunk_size = max(1, min(chunk_size, 20))  # Уменьшили максимум до 20
+                
+            except Exception as e:
+                logger.warning(f"Error calculating VRAM-based workers: {e}, falling back to defaults")
+                max_workers = 1
+                chunk_size = 10
         else:
+            # Для CPU режима: cpu_count - 1 чтобы оставить ядро для системы
+            cpu_workers = max(1, os.cpu_count() - 1)
+            max_workers = min(cpu_workers, 4)
             chunk_size = 30
+            
+            logger.info(f"CPU mode: using {max_workers} workers (CPU cores: {os.cpu_count()}, reserved 1 for system)")
         
         logger.info(f"Processing video with chunk size: {chunk_size} frames")
         
@@ -267,7 +298,9 @@ async def swap_faces(
             chunks.append((chunk, source_face, i))
         
         processed_frames = [None] * len(frames)
-        with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        logger.info(f"Starting video processing with {len(chunks)} chunks using {max_workers} workers")
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(process_video_chunk, chunk) for chunk in chunks]
             for future in futures:
                 start_idx, chunk_frames = future.result()
