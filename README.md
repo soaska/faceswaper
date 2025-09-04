@@ -164,7 +164,11 @@ docker compose -f face-swap-component/compose.nvidia.yaml up --build
     "video_path": "/temp/media/output_abc123.mp4",
     "duration_seconds": 42,
     "filename": "output.mp4", 
-    "media_type": "video/mp4"
+    "media_type": "video/mp4",
+    "session_id": "abc123ef",
+    "processing_time": 42,
+    "workers_used": 2,
+    "device_type": "nvidia"
 }
 ```
 

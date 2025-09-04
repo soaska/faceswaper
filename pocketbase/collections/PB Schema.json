@@ -203,6 +203,20 @@
           "max": null,
           "noDecimal": true
         }
+      },
+      {
+        "system": false,
+        "id": "threads01",
+        "name": "threads",
+        "type": "number",
+        "required": false,
+        "presentable": false,
+        "unique": false,
+        "options": {
+          "min": null,
+          "max": null,
+          "noDecimal": true
+        }
       }
     ],
     "indexes": [],

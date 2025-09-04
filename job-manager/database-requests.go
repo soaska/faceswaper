@@ -402,22 +402,22 @@ func updateStatus(collection, taskID, status string) error {
 	return nil
 }
 
-// Update duration and price for face_jobs task
-func updateTaskDurationAndPrice(taskID string, duration int, price int) error {
+func updateTaskDurationPriceAndThreads(taskID string, duration int, price int, threads int) error {
 	url := fmt.Sprintf("%s/api/collections/face_jobs/records/%s", pocketBaseUrl, taskID)
 
 	data := map[string]int{
 		"duration": duration,
 		"price":    price,
+		"threads":  threads,
 	}
 	jsonData, err := json.Marshal(data)
 	if err != nil {
-		return fmt.Errorf("ошибка сериализации данных для обновления длительности и цены: %v", err)
+		return fmt.Errorf("ошибка сериализации данных для обновления задачи: %v", err)
 	}
 
 	_, err = sendAuthorizedRequest("PATCH", url, jsonData)
 	if err != nil {
-		return fmt.Errorf("ошибка обновления длительности и цены задачи: %v", err)
+		return fmt.Errorf("ошибка обновления данных задачи: %v", err)
 	}
 
 	return nil

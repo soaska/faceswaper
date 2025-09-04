@@ -206,7 +206,7 @@ func processFaceSwapJobs(ctx context.Context) {
 			continue
 		}
 
-		duration, err := processFaceSwapTask(task)
+		realDuration, workerCount, err := processFaceSwapTask(task)
 		if err != nil {
 			log.Printf("Ошибка обработки задачи замены лиц %s: %v", task.ID, err)
 			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
@@ -215,8 +215,12 @@ func processFaceSwapJobs(ctx context.Context) {
 			continue
 		}
 
-		// Calculate additional cost based on processing time
-		additionalCost := duration / 20  // floor division
+		// Calculate billable duration (real time × workers for GPU billing)
+		billableDuration := realDuration * workerCount
+		log.Printf("Биллинг: %d сек × %d потоков = %d потоко-секунд", realDuration, workerCount, billableDuration)
+
+		// Calculate additional cost based on billable time (standard rounding)
+		additionalCost := int(float64(billableDuration)/20.0 + 0.5)  // standard rounding
 		totalCost := 2 + additionalCost
 		
 		if totalCost > 30 {
@@ -247,10 +251,10 @@ func processFaceSwapJobs(ctx context.Context) {
 		}
 		
 		totalDeducted := baseAmount + additionalAmount
-		log.Printf("Задача %s обработана за %d секунд, списано %d монет (базовые: %d, за время: %d)", task.ID, duration, totalDeducted, baseAmount, additionalAmount)
+		log.Printf("Задача %s обработана за %d секунд (%d потоков), списано %d монет (базовые: %d, за время: %d)", task.ID, realDuration, workerCount, totalDeducted, baseAmount, additionalAmount)
 
 		// Update duration and price in database
-		err = updateTaskDurationAndPrice(task.ID, duration, totalDeducted)
+		err = updateTaskDurationPriceAndThreads(task.ID, realDuration, totalDeducted, workerCount)
 		if err != nil {
 			log.Printf("Предупреждение: Не удалось обновить длительность и цену для задачи %s: %v", task.ID, err)
 		}
