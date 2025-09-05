@@ -304,23 +304,36 @@ class VideoProcessor:
             has_audio = False
         
         if has_audio:
-            # Include audio from original video (copy video to avoid re-encoding)
+            # Include audio from original video with H.264 encoding
             command = [
                 'ffmpeg', '-y',
                 '-i', str(video_path),
                 '-i', str(audio_source),
-                '-c:v', 'copy',
+                '-c:v', 'libx264',
+                '-profile:v', 'baseline',
+                '-preset', 'fast',
+                '-crf', '23',
                 '-c:a', 'aac',
+                '-ar', '44100',
+                '-ac', '2',
+                '-b:a', '128k',
+                '-movflags', '+faststart',
+                '-pix_fmt', 'yuv420p',
                 '-map', '0:v:0',
                 '-map', '1:a:0',
                 str(output_path)
             ]
         else:
-            # Video only, no audio (copy video to avoid re-encoding)
+            # Video only, no audio with H.264 encoding
             command = [
                 'ffmpeg', '-y',
                 '-i', str(video_path),
-                '-c:v', 'copy',
+                '-c:v', 'libx264',
+                '-profile:v', 'baseline',
+                '-preset', 'fast',
+                '-crf', '23',
+                '-movflags', '+faststart',
+                '-pix_fmt', 'yuv420p',
                 str(output_path)
             ]
         
