@@ -166,8 +166,8 @@ class VideoProcessor:
                 if free_vram_gb < 2.0:
                     logger.warning(f"Low VRAM: {free_vram_gb:.2f}GB. Consider CPU mode.")
                 
-                # 2GB VRAM per worker
-                vram_workers = max(1, int(free_vram_gb / 2.0))
+                # 3GB VRAM per worker
+                vram_workers = max(1, int(free_vram_gb / 3.0))
                 max_workers = min(vram_workers, os.cpu_count(), 4)
                 
                 # Calculate chunk size based on available memory
@@ -304,36 +304,28 @@ class VideoProcessor:
             has_audio = False
         
         if has_audio:
-            # Include audio from original video with H.264 encoding
+            # Include audio from original video (fast copy with proper metadata)
             command = [
                 'ffmpeg', '-y',
                 '-i', str(video_path),
                 '-i', str(audio_source),
-                '-c:v', 'libx264',
-                '-profile:v', 'baseline',
-                '-preset', 'ultrafast',
-                '-crf', '28',
+                '-c:v', 'copy',
                 '-c:a', 'aac',
                 '-ar', '44100',
                 '-ac', '2',
                 '-b:a', '128k',
                 '-movflags', '+faststart',
-                '-pix_fmt', 'yuv420p',
                 '-map', '0:v:0',
                 '-map', '1:a:0',
                 str(output_path)
             ]
         else:
-            # Video only, no audio with H.264 encoding
+            # Video only, no audio (fast copy with proper metadata)
             command = [
                 'ffmpeg', '-y',
                 '-i', str(video_path),
-                '-c:v', 'libx264',
-                '-profile:v', 'baseline',
-                '-preset', 'ultrafast',
-                '-crf', '28',
+                '-c:v', 'copy',
                 '-movflags', '+faststart',
-                '-pix_fmt', 'yuv420p',
                 str(output_path)
             ]
         
