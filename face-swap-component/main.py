@@ -274,7 +274,7 @@ class VideoProcessor:
         
         # Write processed video
         temp_output = output_path.parent / f"temp_{output_path.name}"
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        fourcc = cv2.VideoWriter_fourcc(*'H264')
         video_writer = cv2.VideoWriter(str(temp_output), fourcc, fps, (width, height))
         
         for frame in processed_frames:
