@@ -183,15 +183,25 @@ func processFaceSwapJobs(ctx context.Context) {
 			currentCoins = 0
 		}
 
-		if int(currentCoins) < 2 {
-			log.Printf("Недостаточно монет для задачи %s. Минимум требуется: 2, доступно: %d", task.ID, int(currentCoins))
-			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: недостаточно монет. Минимум требуется: 2, доступно: %d", int(currentCoins)))
+		// Determine if this is a photo or video task
+		ext := filepath.Ext(task.InputMedia)
+		isPhoto := ext == ".jpg" || ext == ".jpeg" || ext == ".png"
+
+		// Set base cost based on media type
+		requiredCoins := 2
+		if isPhoto {
+			requiredCoins = 1
+		}
+
+		if int(currentCoins) < requiredCoins {
+			log.Printf("Недостаточно монет для задачи %s. Минимум требуется: %d, доступно: %d", task.ID, requiredCoins, int(currentCoins))
+			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: недостаточно монет. Минимум требуется: %d, доступно: %d", requiredCoins, int(currentCoins)))
 			sendErrorNotification(task.Owner, task.ID)
 			continue
 		}
 
-		// Списываем базовые 2 монеты
-		baseAmount, err := checkAndDeductCoins(tgid, 2)
+		// Списываем базовую стоимость
+		baseAmount, err := checkAndDeductCoins(tgid, requiredCoins)
 		if err != nil {
 			log.Printf("Ошибка списания базовых монет для задачи %s: %v", task.ID, err)
 			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
@@ -215,43 +225,52 @@ func processFaceSwapJobs(ctx context.Context) {
 			continue
 		}
 
-		// Calculate billable duration (real time × workers for GPU billing)
-		billableDuration := realDuration * workerCount
-		log.Printf("Биллинг: %d сек × %d потоков = %d потоко-секунд", realDuration, workerCount, billableDuration)
+		var totalDeducted int
 
-		// Calculate additional cost based on billable time (standard rounding)
-		additionalCost := int(float64(billableDuration)/20.0 + 0.5)  // standard rounding
-		totalCost := 2 + additionalCost
-		
-		if totalCost > 30 {
-			totalCost = 30  // cap at 30 coins
-		}
-		
-		// Handle additional coins
-		additionalAmount := 0
-		finalAdditionalCost := additionalCost
-		if additionalCost > 0 {
-			// Try to deduct additional coins
-			additionalAmount, err = checkAndDeductCoins(tgid, additionalCost)
-			if err != nil {
-				// User can't pay additional cost - double it and force negative balance
-				finalAdditionalCost = additionalCost * 2
-				log.Printf("Пользователь не может доплатить %d монет за задачу %s, удваиваем до %d и разрешаем отрицательный баланс", additionalCost, task.ID, finalAdditionalCost)
-				
-				err = forceDeductCoins(tgid, finalAdditionalCost)
-				if err != nil {
-					log.Printf("Ошибка принудительного списания монет для задачи %s: %v", task.ID, err)
-					updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
-					sendErrorNotification(task.Owner, task.ID)
-					refundCoins(tgid, baseAmount)
-					continue
-				}
-				additionalAmount = finalAdditionalCost
+		if isPhoto {
+			// Photo tasks: flat fee of 1 coin, no additional billing
+			totalDeducted = baseAmount
+			log.Printf("Задача (фото) %s обработана за %d секунд, списано %d монет", task.ID, realDuration, totalDeducted)
+		} else {
+			// Video tasks: 2 coins base + additional billing based on duration
+			// Calculate billable duration (real time × workers for GPU billing)
+			billableDuration := realDuration * workerCount
+			log.Printf("Биллинг: %d сек × %d потоков = %d потоко-секунд", realDuration, workerCount, billableDuration)
+
+			// Calculate additional cost based on billable time (standard rounding)
+			additionalCost := int(float64(billableDuration)/20.0 + 0.5)  // standard rounding
+			totalCost := 2 + additionalCost
+
+			if totalCost > 30 {
+				totalCost = 30  // cap at 30 coins
 			}
+
+			// Handle additional coins
+			additionalAmount := 0
+			finalAdditionalCost := additionalCost
+			if additionalCost > 0 {
+				// Try to deduct additional coins
+				additionalAmount, err = checkAndDeductCoins(tgid, additionalCost)
+				if err != nil {
+					// User can't pay additional cost - double it and force negative balance
+					finalAdditionalCost = additionalCost * 2
+					log.Printf("Пользователь не может доплатить %d монет за задачу %s, удваиваем до %d и разрешаем отрицательный баланс", additionalCost, task.ID, finalAdditionalCost)
+
+					err = forceDeductCoins(tgid, finalAdditionalCost)
+					if err != nil {
+						log.Printf("Ошибка принудительного списания монет для задачи %s: %v", task.ID, err)
+						updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
+						sendErrorNotification(task.Owner, task.ID)
+						refundCoins(tgid, baseAmount)
+						continue
+					}
+					additionalAmount = finalAdditionalCost
+				}
+			}
+
+			totalDeducted = baseAmount + additionalAmount
+			log.Printf("Задача (видео) %s обработана за %d секунд (%d потоков), списано %d монет (базовые: %d, за время: %d)", task.ID, realDuration, workerCount, totalDeducted, baseAmount, additionalAmount)
 		}
-		
-		totalDeducted := baseAmount + additionalAmount
-		log.Printf("Задача %s обработана за %d секунд (%d потоков), списано %d монет (базовые: %d, за время: %d)", task.ID, realDuration, workerCount, totalDeducted, baseAmount, additionalAmount)
 
 		// Update duration and price in database
 		err = updateTaskDurationPriceAndThreads(task.ID, realDuration, totalDeducted, workerCount)
@@ -267,15 +286,27 @@ func processFaceSwapJobs(ctx context.Context) {
 			continue
 		}
 
-		// Отправляем результат пользователю
-		outputPath := filepath.Join("cache", fmt.Sprintf("%s_output.mp4", task.ID))
-		err = sendVideoToUser(task.Owner, outputPath)
-		if err != nil {
-			log.Printf("Ошибка отправки видео пользователю для задачи %s: %v", task.ID, err)
-			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
-			sendErrorNotification(task.Owner, task.ID)
-			refundCoins(tgid, totalDeducted)
-			continue
+		// Отправляем результат пользователю (фото или видео)
+		if isPhoto {
+			outputPath := filepath.Join("cache", fmt.Sprintf("%s_output.jpg", task.ID))
+			err = sendPhotoToUser(task.Owner, outputPath)
+			if err != nil {
+				log.Printf("Ошибка отправки фото пользователю для задачи %s: %v", task.ID, err)
+				updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
+				sendErrorNotification(task.Owner, task.ID)
+				refundCoins(tgid, totalDeducted)
+				continue
+			}
+		} else {
+			outputPath := filepath.Join("cache", fmt.Sprintf("%s_output.mp4", task.ID))
+			err = sendVideoToUser(task.Owner, outputPath)
+			if err != nil {
+				log.Printf("Ошибка отправки видео пользователю для задачи %s: %v", task.ID, err)
+				updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
+				sendErrorNotification(task.Owner, task.ID)
+				refundCoins(tgid, totalDeducted)
+				continue
+			}
 		}
 
 		err = updateStatus("face_jobs", task.ID, "completed")

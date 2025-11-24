@@ -287,8 +287,9 @@ func main() {
 			greeting := fmt.Sprintf(
 				"👋 Привет, %s! Добро пожаловать в бот для создания кружков и замены лиц!\n\n"+
 					"🎯 Что я умею:\n"+
-					"• Создавать кружки из видео\n"+
-					"• Заменять лица на видео (временно недоступно)\n\n"+
+					"• Создавать кружки из видео (1 монета)\n"+
+					"• Заменять лица на фото (1 монета)\n"+
+					"• Заменять лица на видео (2+ монет)\n\n"+
 					"📚 Подробнее о командах: /help\n"+
 					"📊 Проверить статус: /status\n"+
 					"📢 Новости: https://t.me/+HGQVwMhFzIExZDNi",
@@ -301,10 +302,14 @@ func main() {
 		// help
 		if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "help") {
 			helpMessage := "📚 Список доступных команд:\n\n" +
-				"🎥 Создание кружка:\n" +
+				"🎥 Создание кружка (1 монета):\n" +
 				"• Отправьте видео\n" +
 				"• Дождитесь обработки\n\n" +
-				"👤 Замена лица (временно недоступно):\n" +
+				"👤 Замена лица на фото (1 монета):\n" +
+				"• Отправьте фото лица\n" +
+				"• Отправьте второе фото\n" +
+				"• Дождитесь обработки\n\n" +
+				"🎬 Замена лица на видео (2+ монет):\n" +
 				"• Отправьте фото лица\n" +
 				"• Отправьте видео\n" +
 				"• Дождитесь обработки\n\n" +
@@ -331,17 +336,41 @@ func main() {
 		// Обработка получения фотографии
 		if update.Message.Photo != nil {
 			fileID := update.Message.Photo[len(update.Message.Photo)-1].FileID
-			session.FaceFileID = fileID // Save photo ID for current user
 
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Получена фотография. Пожалуйста, отправьте видео для замены лица.")
-			cancelMarkup := tgbotapi.NewReplyKeyboard(
-				tgbotapi.NewKeyboardButtonRow(
-					tgbotapi.NewKeyboardButton("Отменить"),
-				),
-			)
-			msg.ReplyMarkup = cancelMarkup
-			bot.Send(msg)
-			continue
+			// Проверяем, есть ли уже сохраненное фото в сессии
+			if session.FaceFileID != "" {
+				// Второе фото получено - создаем задачу замены лица на фото
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ловлю!")
+				bot.Send(msg)
+
+				jobID, err := createFaceJob(bot, pbUserID, fileID, session.FaceFileID)
+				if err != nil {
+					log.Printf("Не удалось создать задание на замену лица: %v", err)
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
+					bot.Send(msg)
+					continue
+				}
+
+				msg = tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше фото поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
+				bot.Send(msg)
+
+				// Сбрасываем данные сессии
+				session.FaceFileID = ""
+				continue
+			} else {
+				// Первое фото получено - сохраняем и просим второе фото или видео
+				session.FaceFileID = fileID
+
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Получена фотография. Пожалуйста, отправьте видео или второе фото для замены лица.")
+				cancelMarkup := tgbotapi.NewReplyKeyboard(
+					tgbotapi.NewKeyboardButtonRow(
+						tgbotapi.NewKeyboardButton("Отменить"),
+					),
+				)
+				msg.ReplyMarkup = cancelMarkup
+				bot.Send(msg)
+				continue
+			}
 		}
 
 		// Обработка получения видео

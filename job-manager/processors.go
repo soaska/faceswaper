@@ -62,7 +62,7 @@ func checkFaceSwapHealth() error {
 	return nil
 }
 
-// Process face swap task - returns (realDuration, workerCount, error)
+// Process face swap task - determines media type and routes to appropriate handler
 func processFaceSwapTask(task *Task) (int, int, error) {
 	if task.InputMedia == "" || task.SourceImage == "" {
 		return 0, 0, fmt.Errorf("задача с ID %s не содержит ссылок на input_media или source_image", task.ID)
@@ -73,6 +73,19 @@ func processFaceSwapTask(task *Task) (int, int, error) {
 		return 0, 0, fmt.Errorf("сервер замены лиц занят: %v", err)
 	}
 
+	// Determine media type by extension
+	ext := filepath.Ext(task.InputMedia)
+	isPhoto := ext == ".jpg" || ext == ".jpeg" || ext == ".png"
+
+	if isPhoto {
+		return processPhotoSwap(task)
+	} else {
+		return processVideoSwap(task)
+	}
+}
+
+// Process video face swap - returns (realDuration, workerCount, error)
+func processVideoSwap(task *Task) (int, int, error) {
 	cacheDir := "cache"
 	err := os.MkdirAll(cacheDir, os.ModePerm)
 	if err != nil {
@@ -112,6 +125,47 @@ func processFaceSwapTask(task *Task) (int, int, error) {
 	return realDuration, workerCount, nil
 }
 
+// Process photo face swap - returns (processingTime, workerCount, error)
+func processPhotoSwap(task *Task) (int, int, error) {
+	cacheDir := "cache"
+	err := os.MkdirAll(cacheDir, os.ModePerm)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка создания кэша: %v", err)
+	}
+
+	// Download source files
+	sourceImagePath := filepath.Join(cacheDir, fmt.Sprintf("%s_source.jpg", task.ID))
+	targetImagePath := filepath.Join(cacheDir, fmt.Sprintf("%s_target.jpg", task.ID))
+	outputPath := filepath.Join(cacheDir, fmt.Sprintf("%s_output.jpg", task.ID))
+
+	sourceImageUrl := fmt.Sprintf("%s/api/files/face_jobs/%s/%s", pocketBaseUrl, task.ID, task.SourceImage)
+	targetImageUrl := fmt.Sprintf("%s/api/files/face_jobs/%s/%s", pocketBaseUrl, task.ID, task.InputMedia)
+
+	err = downloadFile(sourceImageUrl, sourceImagePath)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка скачивания исходного изображения: %v", err)
+	}
+
+	err = downloadFile(targetImageUrl, targetImagePath)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка скачивания целевого изображения: %v", err)
+	}
+
+	// Process photo swap
+	processingTime, workerCount, err := processPhotoSwapComponent(sourceImagePath, targetImagePath, outputPath)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка обработки FaceSwapComponent (фото): %v", err)
+	}
+
+	// Upload result back
+	err = uploadOutputMedia("face_jobs", task.ID, outputPath)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка загрузки результата в бд: %v", err)
+	}
+
+	return processingTime, workerCount, nil
+}
+
 // Face swap response structure
 type FaceSwapResponse struct {
 	VideoPath       string `json:"video_path"`
@@ -122,6 +176,18 @@ type FaceSwapResponse struct {
 	ProcessingTime  int    `json:"processing_time"`
 	WorkersUsed     int    `json:"workers_used"`
 	DeviceType      string `json:"device_type"`
+}
+
+// Photo swap response structure
+type PhotoSwapResponse struct {
+	ImagePath      string `json:"image_path"`
+	DurationSeconds int   `json:"duration_seconds"`
+	Filename       string `json:"filename"`
+	MediaType      string `json:"media_type"`
+	SessionID      string `json:"session_id"`
+	ProcessingTime int    `json:"processing_time"`
+	WorkersUsed    int    `json:"workers_used"`
+	DeviceType     string `json:"device_type"`
 }
 
 // Send files to FaceSwapComponent and get result
@@ -231,6 +297,115 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int,
 	}
 
 	return swapResponse.DurationSeconds, swapResponse.WorkersUsed, nil
+}
+
+// Send files to FaceSwapComponent for photo processing
+func processPhotoSwapComponent(sourceImage, targetImage, outputPath string) (int, int, error) {
+	// Open files
+	sourceImageFile, err := os.Open(sourceImage)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка открытия исходного изображения: %v", err)
+	}
+	defer sourceImageFile.Close()
+
+	targetImageFile, err := os.Open(targetImage)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка открытия целевого изображения: %v", err)
+	}
+	defer targetImageFile.Close()
+
+	// Create multipart request
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	sourceImagePart, err := writer.CreateFormFile("source_image", filepath.Base(sourceImage))
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка создания части исходного изображения: %v", err)
+	}
+	_, err = io.Copy(sourceImagePart, sourceImageFile)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка копирования исходного изображения: %v", err)
+	}
+
+	targetImagePart, err := writer.CreateFormFile("target_image", filepath.Base(targetImage))
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка создания части целевого изображения: %v", err)
+	}
+	_, err = io.Copy(targetImagePart, targetImageFile)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка копирования целевого изображения: %v", err)
+	}
+
+	err = writer.Close()
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка завершения multipart: %v", err)
+	}
+
+	// Send request
+	req, err := http.NewRequest("POST", FaceSwapComponent_URL+"/swap-photo", body)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка создания запроса к FaceSwapComponent: %v", err)
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка отправки запроса к FaceSwapComponent: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return 0, 0, fmt.Errorf("ошибка чтения ответа при ошибке FaceSwapComponent: %v", err)
+		}
+		return 0, 0, fmt.Errorf("ошибка FaceSwapComponent, статус %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Read JSON response
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка чтения ответа: %v", err)
+	}
+
+	var swapResponse PhotoSwapResponse
+	err = json.Unmarshal(responseBody, &swapResponse)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка парсинга JSON ответа: %v", err)
+	}
+
+	log.Printf("FaceSwap (фото) обработка завершена: сессия %s, устройство %s, потоков %d, время %d сек",
+		swapResponse.SessionID, swapResponse.DeviceType, swapResponse.WorkersUsed, swapResponse.ProcessingTime)
+
+	// Copy image file from temp path to our path
+	sourceImageResultFile, err := os.Open(swapResponse.ImagePath)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка открытия изображения из ответа: %v", err)
+	}
+	defer sourceImageResultFile.Close()
+
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка создания файла результата: %v", err)
+	}
+	defer outFile.Close()
+
+	_, err = io.Copy(outFile, sourceImageResultFile)
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка копирования результата: %v", err)
+	}
+
+	// Check that file is created and has size
+	fileInfo, err := outFile.Stat()
+	if err != nil {
+		return 0, 0, fmt.Errorf("ошибка получения информации о файле: %v", err)
+	}
+	if fileInfo.Size() == 0 {
+		return 0, 0, fmt.Errorf("получен пустой файл результата")
+	}
+
+	return swapResponse.ProcessingTime, swapResponse.WorkersUsed, nil
 }
 
 // Process circle video file

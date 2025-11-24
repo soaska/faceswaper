@@ -290,19 +290,19 @@ class VideoProcessor:
         """Combine video with original audio and optimize for compatibility."""
         if output_path.exists():
             output_path.unlink()
-        
+
         # Check if source video has audio stream
         probe_command = [
             'ffprobe', '-v', 'quiet', '-show_entries', 'stream=codec_type',
             '-of', 'csv=p=0', str(audio_source)
         ]
-        
+
         try:
             probe_result = subprocess.run(probe_command, capture_output=True, text=True, check=True)
             has_audio = 'audio' in probe_result.stdout
         except subprocess.CalledProcessError:
             has_audio = False
-        
+
         if has_audio:
             # Include audio from original video (fast copy with proper metadata)
             command = [
@@ -328,8 +328,50 @@ class VideoProcessor:
                 '-movflags', '+faststart',
                 str(output_path)
             ]
-        
+
         subprocess.run(command, check=True)
+
+    def process_image(self, source_path: Path, target_path: Path, output_path: Path) -> int:
+        """Process single image face swap."""
+        # Load and validate source image
+        source_img = cv2.imread(str(source_path))
+        if source_img is None:
+            raise HTTPException(status_code=400, detail="Invalid source image")
+
+        source_img_rgb = cv2.cvtColor(source_img, cv2.COLOR_BGR2RGB)
+        source_faces = self.face_analyzer.get(source_img_rgb)
+
+        if not source_faces:
+            raise HTTPException(status_code=400, detail="No face detected in source image")
+
+        source_face = source_faces[0]
+
+        # Load and validate target image
+        target_img = cv2.imread(str(target_path))
+        if target_img is None:
+            raise HTTPException(status_code=400, detail="Invalid target image")
+
+        target_img_rgb = cv2.cvtColor(target_img, cv2.COLOR_BGR2RGB)
+        target_faces = self.face_analyzer.get(target_img_rgb)
+
+        if not target_faces:
+            raise HTTPException(status_code=400, detail="No face detected in target image")
+
+        logger.info(f"Processing image with {len(target_faces)} face(s)")
+
+        # Apply face swapping to all detected faces
+        for face in target_faces:
+            if face.kps is not None:
+                target_img_rgb = self.swapper.get(target_img_rgb, face, source_face, paste_back=True)
+
+        # Convert back to BGR and save
+        result_img = cv2.cvtColor(target_img_rgb, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(str(output_path), result_img)
+
+        logger.info(f"Image processing complete: {output_path}")
+
+        # Return 1 as worker count for images (no parallel processing)
+        return 1
 
 
 class FileManager:
@@ -443,6 +485,62 @@ async def swap_faces(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/swap-photo")
+async def swap_faces_photo(
+    source_image: UploadFile = File(..., description="Source face image"),
+    target_image: UploadFile = File(..., description="Target image for face replacement")
+):
+    """
+    Face swapping for images.
+
+    Returns:
+        JSON response with image path, processing duration, and metadata
+    """
+    start_time = time.time()
+    session_id = str(uuid.uuid4())[:8]
+
+    try:
+        # Clean up old files
+        file_manager.cleanup_old_files(MEDIA_DIR, HOUR_SECONDS)
+
+        # Generate session file paths
+        source_path, target_path, output_path = file_manager.generate_session_paths(
+            session_id, source_image.filename, target_image.filename
+        )
+
+        # Change output extension to jpg for images
+        output_path = output_path.with_suffix('.jpg')
+
+        # Save uploaded files
+        with open(source_path, "wb") as f:
+            shutil.copyfileobj(source_image.file, f)
+        with open(target_path, "wb") as f:
+            shutil.copyfileobj(target_image.file, f)
+
+        # Process image
+        max_workers = processor.process_image(source_path, target_path, output_path)
+
+        # Calculate processing metrics
+        processing_duration = int(time.time() - start_time)
+
+        logger.info(f"Photo session {session_id} completed successfully")
+
+        return JSONResponse({
+            "image_path": str(output_path),
+            "duration_seconds": processing_duration,
+            "filename": "output.jpg",
+            "media_type": "image/jpeg",
+            "session_id": session_id,
+            "processing_time": processing_duration,
+            "workers_used": max_workers,
+            "device_type": DEVICE_TYPE
+        })
+
+    except Exception as e:
+        logger.error(f"Photo session {session_id} failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/health")
 async def health_check():
     """
@@ -451,7 +549,7 @@ async def health_check():
     try:
         git_commit = os.getenv("GIT_COMMIT", "unknown")
         git_message = os.getenv("GIT_MESSAGE", "unknown")
-        
+
         device_info = {
             "status": "healthy",
             "device_type": DEVICE_TYPE,
@@ -464,7 +562,7 @@ async def health_check():
             "cache_directory": str(CACHE_DIR),
             "temp_directory": str(TEMP_DIR)
         }
-        
+
         if DEVICE_TYPE == "nvidia" and torch.cuda.is_available():
             device_info.update({
                 "cuda_available": True,
@@ -472,9 +570,9 @@ async def health_check():
                 "current_device": torch.cuda.current_device(),
                 "gpu_memory_gb": torch.cuda.get_device_properties(0).total_memory / 1024**3
             })
-        
+
         return device_info
-        
+
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
