@@ -8,17 +8,57 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
+	"time"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 	"github.com/joho/godotenv"
 )
 
+// 403 error tracking
+var (
+	forbidden403Count    int
+	forbidden403Mutex    sync.Mutex
+	forbidden403MaxCount = 5
+	forbidden403Window   = 5 * time.Minute
+	forbidden403Times    []time.Time
+)
+
+var Err403TooMany = fmt.Errorf("слишком много ошибок 403 при доступе к базе данных")
+
+func track403Error() {
+	forbidden403Mutex.Lock()
+	defer forbidden403Mutex.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-forbidden403Window)
+	var recent []time.Time
+	for _, t := range forbidden403Times {
+		if t.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+	recent = append(recent, now)
+	forbidden403Times = recent
+
+	log.Printf("Ошибка 403 при доступе к базе данных. Количество за последние %v: %d/%d",
+		forbidden403Window, len(forbidden403Times), forbidden403MaxCount)
+
+	if len(forbidden403Times) >= forbidden403MaxCount {
+		log.Printf("КРИТИЧЕСКАЯ ОШИБКА: Слишком много ошибок 403 (%d за %v). Завершение программы.",
+			len(forbidden403Times), forbidden403Window)
+		os.Exit(3)
+	}
+}
+
 // PocketBase global credentials
-var pocketBaseUrl string
-var email string
-var password string
-var authToken string
-var api_endpint string
+var (
+	pocketBaseUrl string
+	email         string
+	password      string
+	authToken     string
+	api_endpint   string
+)
 
 // just for sending search requests to pocketbase
 func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
@@ -44,6 +84,12 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	// Проверка на 403 ошибку
+	if resp.StatusCode == http.StatusForbidden {
+		track403Error()
+		return nil, fmt.Errorf("ошибка 403 Forbidden при доступе к базе данных: %s", string(body))
+	}
+
 	return body, nil
 }
 
@@ -53,7 +99,7 @@ type FileResponse struct {
 }
 
 func getTelegramFile(bot *tgbotapi.BotAPI, fileID string) (string, error) {
-	//file, err := bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
+	// file, err := bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
 	CallUrl := fmt.Sprintf("%s/bot%s/getFile?file_id=%s", api_endpint, bot.Token, fileID)
 	resp, err := http.Get(CallUrl)
 	if err != nil {
@@ -77,7 +123,7 @@ func getTelegramFile(bot *tgbotapi.BotAPI, fileID string) (string, error) {
 		if !ok || filePath == "" {
 			return "", fmt.Errorf("не найден путь в ответе сервера")
 		}
-		//serverPath := fmt.Sprintf("/storage/%s/%s", bot.Token, filePath.(string))
+		// serverPath := fmt.Sprintf("/storage/%s/%s", bot.Token, filePath.(string))
 		return filePath.(string), nil
 	} else {
 		return "", fmt.Errorf("ошибка получения пути: %v", resp.StatusCode)

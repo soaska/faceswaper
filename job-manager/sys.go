@@ -9,19 +9,61 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/joho/godotenv"
 )
 
+// 403 error tracking
+var (
+	forbidden403Count    int
+	forbidden403Mutex    sync.Mutex
+	forbidden403MaxCount = 5
+	forbidden403Window   = 5 * time.Minute
+	forbidden403Times    []time.Time
+)
+
+var Err403TooMany = fmt.Errorf("слишком много ошибок 403 при доступе к базе данных")
+
+func track403Error() {
+	forbidden403Mutex.Lock()
+	defer forbidden403Mutex.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-forbidden403Window)
+	var recent []time.Time
+	for _, t := range forbidden403Times {
+		if t.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+	recent = append(recent, now)
+	forbidden403Times = recent
+
+	log.Printf("Ошибка 403 при доступе к базе данных. Количество за последние %v: %d/%d",
+		forbidden403Window, len(forbidden403Times), forbidden403MaxCount)
+
+	if len(forbidden403Times) >= forbidden403MaxCount {
+		log.Printf("КРИТИЧЕСКАЯ ОШИБКА: Слишком много ошибок 403 (%d за %v). Завершение программы.",
+			len(forbidden403Times), forbidden403Window)
+		os.Exit(3)
+	}
+}
+
 // PocketBase global credentials
-var pocketBaseUrl string
-var email string
-var password string
-var authToken string
+var (
+	pocketBaseUrl string
+	email         string
+	password      string
+	authToken     string
+)
 
 // tgbot globals
-var BOT_TOKEN string
-var BOT_ENDPOINT string
+var (
+	BOT_TOKEN    string
+	BOT_ENDPOINT string
+)
 
 // FaceSwapComponent
 var FaceSwapComponent_URL string
@@ -48,6 +90,12 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
+	}
+
+	// Проверка на 403 ошибку
+	if resp.StatusCode == http.StatusForbidden {
+		track403Error()
+		return nil, fmt.Errorf("ошибка 403 Forbidden при доступе к базе данных: %s", string(body))
 	}
 
 	return body, nil
