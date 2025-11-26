@@ -435,7 +435,7 @@ func main() {
 				// compress command
 				if update.Message.Text != "" && strings.HasPrefix(strings.ToLower(update.Message.Text), "/compress") {
 					session.WaitingForCompress = true
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Отправьте JPG изображение для сжатия до 12% качества.")
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Отправляйте изображения для сжатия до 12% качества.\nНажмите \"Отменить\" или /cancel когда закончите.")
 					cancelMarkup := tgbotapi.NewReplyKeyboard(
 						tgbotapi.NewKeyboardButtonRow(
 							tgbotapi.NewKeyboardButton("Отменить"),
@@ -458,8 +458,6 @@ func main() {
 						// Запускаем обработку в горутине
 						go handleCompressImage(bot, update.Message.Chat.ID, pbUserID, fileID)
 
-						// Сбрасываем режим ожидания
-						session.WaitingForCompress = false
 						continue
 					}
 
@@ -540,10 +538,11 @@ func main() {
 				}
 
 				// Обработка команды отмены
-				if update.Message.Text == "Отменить" {
-					session.FaceFileID = ""            // Сбрасываем временные данные в сессии
-					session.WaitingForCompress = false // Сбрасываем режим сжатия
+				if update.Message.Text == "Отменить" || strings.HasPrefix(strings.ToLower(update.Message.Text), "/cancel") {
+					session.FaceFileID = ""
+					session.WaitingForCompress = false
 					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Операция отменена.")
+					msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
 					bot.Send(msg)
 					continue
 				}
