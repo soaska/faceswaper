@@ -21,9 +21,9 @@ var (
 	GitMessage = "unknown"
 )
 
-// Handle /compress command - compress JPG to 12% quality
+// Handle /compress command - compress JPG to 12% quality (FREE for users with positive balance)
 func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, fileID string) {
-	// Check user balance
+	// Check user has positive balance (feature is free but requires account with coins)
 	userData, err := getUserInfo(int(chatID))
 	if err != nil {
 		log.Printf("Ошибка получения данных пользователя: %v", err)
@@ -33,14 +33,14 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, file
 	}
 
 	coins := int(userData["coins"].(float64))
-	if coins < 1 {
-		msg := tgbotapi.NewMessage(chatID, "Недостаточно монет для сжатия изображения. Требуется: 1 монета.")
+	if coins <= 0 {
+		msg := tgbotapi.NewMessage(chatID, "Функция сжатия доступна только пользователям с положительным балансом.")
 		bot.Send(msg)
 		return
 	}
 
 	// Get file path from Telegram
-	filePath, err := getTelegramFile(bot, fileID)
+	inputPath, err := getTelegramFile(bot, fileID)
 	if err != nil {
 		log.Printf("Ошибка получения файла: %v", err)
 		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка получения изображения: %v", err))
@@ -48,7 +48,7 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, file
 		return
 	}
 
-	// Download file
+	// Create cache directory for output
 	cacheDir := "cache"
 	err = os.MkdirAll(cacheDir, os.ModePerm)
 	if err != nil {
@@ -58,37 +58,7 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, file
 		return
 	}
 
-	inputPath := filepath.Join(cacheDir, fmt.Sprintf("compress_input_%s.jpg", fileID))
 	outputPath := filepath.Join(cacheDir, fmt.Sprintf("compress_output_%s.jpg", fileID))
-
-	// Download image
-	fileURL := fmt.Sprintf("%s/file/bot%s/%s", api_endpint, bot.Token, filePath)
-	resp, err := http.Get(fileURL)
-	if err != nil {
-		log.Printf("Ошибка скачивания файла: %v", err)
-		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка скачивания изображения: %v", err))
-		bot.Send(msg)
-		return
-	}
-	defer resp.Body.Close()
-
-	inputFile, err := os.Create(inputPath)
-	if err != nil {
-		log.Printf("Ошибка создания файла: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка создания временного файла.")
-		bot.Send(msg)
-		return
-	}
-
-	_, err = io.Copy(inputFile, resp.Body)
-	inputFile.Close()
-	if err != nil {
-		log.Printf("Ошибка сохранения файла: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка сохранения файла.")
-		bot.Send(msg)
-		return
-	}
-	defer os.Remove(inputPath)
 	defer os.Remove(outputPath)
 
 	// Open and decode image
@@ -129,18 +99,9 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, file
 		return
 	}
 
-	// Deduct coin
-	// err = deductUserCoins(userID, 1)
-	// if err != nil {
-	// 	log.Printf("Ошибка списания монет: %v", err)
-	// 	msg := tgbotapi.NewMessage(chatID, "Ошибка списания монет.")
-	// 	bot.Send(msg)
-	// 	return
-	// }
-
 	// Send compressed image back
 	photo := tgbotapi.NewPhoto(chatID, tgbotapi.FilePath(outputPath))
-	photo.Caption = "Изображение сжато до 12% качества. Списана 1 монета."
+	photo.Caption = "Изображение сжато до 12% качества."
 	_, err = bot.Send(photo)
 	if err != nil {
 		log.Printf("Ошибка отправки сжатого изображения: %v", err)
@@ -426,7 +387,7 @@ func main() {
 						"👋 Привет, %s! Добро пожаловать в бот для создания кружков и замены лиц!\n\n"+
 							"🎯 Что я умею:\n"+
 							"• Создавать кружки из видео (1 монета)\n"+
-							"• Сжимать фото по команде /compress(бесплатно)\n"+
+							"• Сжимать фото по команде /compress (бесплатно)\n"+
 							"• Заменять лица на фото (1 монета)\n"+
 							"• Заменять лица на видео (2+ монет)\n\n"+
 							"📚 Подробнее о командах: /help\n"+
@@ -452,7 +413,7 @@ func main() {
 						"• Отправьте фото лица\n" +
 						"• Отправьте видео\n" +
 						"• Дождитесь обработки\n\n" +
-						"🗜 /compress - сжать JPG изображение до 12% качества (1 монета)\n\n" +
+						"🗜 /compress - сжать JPG изображение до 12% качества (бесплатно)\n\n" +
 						"📊 /status - проверить статус и баланс\n" +
 						"❓ /help - показать это сообщение\n\n" +
 						"📢 Новости и обновления: https://t.me/+HGQVwMhFzIExZDNi"
