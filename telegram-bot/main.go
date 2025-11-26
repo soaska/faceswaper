@@ -2,7 +2,13 @@ package main
 
 import (
 	"fmt"
+	"image"
+	"image/jpeg"
+	"io"
 	"log"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +20,137 @@ var (
 	GitCommit  = "unknown"
 	GitMessage = "unknown"
 )
+
+// Handle /compress command - compress JPG to 12% quality
+func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, fileID string) {
+	// Check user balance
+	userData, err := getUserInfo(int(chatID))
+	if err != nil {
+		log.Printf("Ошибка получения данных пользователя: %v", err)
+		msg := tgbotapi.NewMessage(chatID, "Ошибка при проверке баланса.")
+		bot.Send(msg)
+		return
+	}
+
+	coins := int(userData["coins"].(float64))
+	if coins < 1 {
+		msg := tgbotapi.NewMessage(chatID, "Недостаточно монет для сжатия изображения. Требуется: 1 монета.")
+		bot.Send(msg)
+		return
+	}
+
+	// Get file path from Telegram
+	filePath, err := getTelegramFile(bot, fileID)
+	if err != nil {
+		log.Printf("Ошибка получения файла: %v", err)
+		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка получения изображения: %v", err))
+		bot.Send(msg)
+		return
+	}
+
+	// Download file
+	cacheDir := "cache"
+	err = os.MkdirAll(cacheDir, os.ModePerm)
+	if err != nil {
+		log.Printf("Ошибка создания кэша: %v", err)
+		msg := tgbotapi.NewMessage(chatID, "Ошибка создания временной директории.")
+		bot.Send(msg)
+		return
+	}
+
+	inputPath := filepath.Join(cacheDir, fmt.Sprintf("compress_input_%s.jpg", fileID))
+	outputPath := filepath.Join(cacheDir, fmt.Sprintf("compress_output_%s.jpg", fileID))
+
+	// Download image
+	fileURL := fmt.Sprintf("%s/file/bot%s/%s", api_endpint, bot.Token, filePath)
+	resp, err := http.Get(fileURL)
+	if err != nil {
+		log.Printf("Ошибка скачивания файла: %v", err)
+		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка скачивания изображения: %v", err))
+		bot.Send(msg)
+		return
+	}
+	defer resp.Body.Close()
+
+	inputFile, err := os.Create(inputPath)
+	if err != nil {
+		log.Printf("Ошибка создания файла: %v", err)
+		msg := tgbotapi.NewMessage(chatID, "Ошибка создания временного файла.")
+		bot.Send(msg)
+		return
+	}
+
+	_, err = io.Copy(inputFile, resp.Body)
+	inputFile.Close()
+	if err != nil {
+		log.Printf("Ошибка сохранения файла: %v", err)
+		msg := tgbotapi.NewMessage(chatID, "Ошибка сохранения файла.")
+		bot.Send(msg)
+		return
+	}
+	defer os.Remove(inputPath)
+	defer os.Remove(outputPath)
+
+	// Open and decode image
+	imgFile, err := os.Open(inputPath)
+	if err != nil {
+		log.Printf("Ошибка открытия файла: %v", err)
+		msg := tgbotapi.NewMessage(chatID, "Ошибка открытия изображения.")
+		bot.Send(msg)
+		return
+	}
+	defer imgFile.Close()
+
+	img, _, err := image.Decode(imgFile)
+	if err != nil {
+		log.Printf("Ошибка декодирования изображения: %v", err)
+		msg := tgbotapi.NewMessage(chatID, "Ошибка чтения изображения. Убедитесь, что это JPG файл.")
+		bot.Send(msg)
+		return
+	}
+
+	// Create output file
+	outputFile, err := os.Create(outputPath)
+	if err != nil {
+		log.Printf("Ошибка создания выходного файла: %v", err)
+		msg := tgbotapi.NewMessage(chatID, "Ошибка создания сжатого файла.")
+		bot.Send(msg)
+		return
+	}
+	defer outputFile.Close()
+
+	// Encode with 12% quality
+	options := &jpeg.Options{Quality: 12}
+	err = jpeg.Encode(outputFile, img, options)
+	if err != nil {
+		log.Printf("Ошибка кодирования изображения: %v", err)
+		msg := tgbotapi.NewMessage(chatID, "Ошибка сжатия изображения.")
+		bot.Send(msg)
+		return
+	}
+
+	// Deduct coin
+	// err = deductUserCoins(userID, 1)
+	// if err != nil {
+	// 	log.Printf("Ошибка списания монет: %v", err)
+	// 	msg := tgbotapi.NewMessage(chatID, "Ошибка списания монет.")
+	// 	bot.Send(msg)
+	// 	return
+	// }
+
+	// Send compressed image back
+	photo := tgbotapi.NewPhoto(chatID, tgbotapi.FilePath(outputPath))
+	photo.Caption = "Изображение сжато до 12% качества. Списана 1 монета."
+	_, err = bot.Send(photo)
+	if err != nil {
+		log.Printf("Ошибка отправки сжатого изображения: %v", err)
+		msg := tgbotapi.NewMessage(chatID, "Ошибка отправки сжатого изображения.")
+		bot.Send(msg)
+		return
+	}
+
+	log.Printf("Изображение успешно сжато для пользователя %s", userID)
+}
 
 // Handle /status command
 func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
@@ -78,7 +215,7 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 			if status, ok := job["status"].(string); ok && strings.Contains(status, "err cleared") {
 				continue
 			}
-			
+
 			// Build response text, including duration and price if available
 			responseText := fmt.Sprintf(
 				"🔹 Задача ID: %s\n"+
@@ -90,7 +227,7 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 				job["created"],
 				job["updated"],
 			)
-			
+
 			// Add duration and price if available (for completed jobs)
 			if duration, ok := job["duration"].(float64); ok && duration > 0 {
 				responseText += fmt.Sprintf("   Длительность: %d сек\n", int(duration))
@@ -98,7 +235,7 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 			if price, ok := job["price"].(float64); ok && price > 0 {
 				responseText += fmt.Sprintf("   Цена: %d монет\n", int(price))
 			}
-			
+
 			response += responseText + "\n"
 		}
 	} else {
@@ -170,7 +307,8 @@ func handleResetErrors(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 }
 
 type UserSession struct {
-	FaceFileID string // временное хранение ID файла фотографии
+	FaceFileID         string // временное хранение ID файла фотографии
+	WaitingForCompress bool   // ожидание фото для сжатия
 }
 
 // Function to get or create user session
@@ -219,7 +357,7 @@ func main() {
 	}
 	log.Printf("🤖 Telegram Bot started")
 	log.Printf("📦 Version: %s - %s", commitShort, GitMessage)
-	
+
 	// load variables
 	BOT_TOKEN, BOT_DEBUG, BOT_ENDPOINT := LoadEnvironment()
 
@@ -253,178 +391,206 @@ func main() {
 			// Основной обработчик
 			updates := bot.GetUpdatesChan(u)
 			for update := range updates {
-		// Обработка нажатия на кнопку
-		if update.CallbackQuery != nil {
-			if update.CallbackQuery.Data == "reset_errors" {
-				err = handleResetErrors(bot, update)
-				if err != nil {
-					log.Printf("Ошибка при сбросе ошибок: %v", err)
-					msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Произошла ошибка при сбросе статусов. Попробуйте позже.")
-					bot.Send(msg)
+				// Обработка нажатия на кнопку
+				if update.CallbackQuery != nil {
+					if update.CallbackQuery.Data == "reset_errors" {
+						err = handleResetErrors(bot, update)
+						if err != nil {
+							log.Printf("Ошибка при сбросе ошибок: %v", err)
+							msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Произошла ошибка при сбросе статусов. Попробуйте позже.")
+							bot.Send(msg)
+						}
+						continue
+					}
 				}
-				continue
-			}
-		}
 
-		if update.Message == nil {
-			continue
-		}
+				if update.Message == nil {
+					continue
+				}
 
-		userID := update.Message.From.ID
-		userName := update.Message.From.UserName
+				userID := update.Message.From.ID
+				userName := update.Message.From.UserName
 
-		pbUserID, err := getOrCreateUser(int(userID), userName)
-		if err != nil {
-			log.Printf("Ошибка при получении/создании пользователя: %v", err)
-			continue
-		}
-
-		// Get session for current user
-		session := getUserSession(int(userID))
-
-		// Приветственное сообщение
-		if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "start") {
-			greeting := fmt.Sprintf(
-				"👋 Привет, %s! Добро пожаловать в бот для создания кружков и замены лиц!\n\n"+
-					"🎯 Что я умею:\n"+
-					"• Создавать кружки из видео (1 монета)\n"+
-					"• Заменять лица на фото (1 монета)\n"+
-					"• Заменять лица на видео (2+ монет)\n\n"+
-					"📚 Подробнее о командах: /help\n"+
-					"📊 Проверить статус: /status\n"+
-					"📢 Новости: https://t.me/+HGQVwMhFzIExZDNi",
-				userName)
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, greeting)
-			bot.Send(msg)
-			continue
-		}
-
-		// help
-		if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "help") {
-			helpMessage := "📚 Список доступных команд:\n\n" +
-				"🎥 Создание кружка (1 монета):\n" +
-				"• Отправьте видео\n" +
-				"• Дождитесь обработки\n\n" +
-				"👤 Замена лица на фото (1 монета):\n" +
-				"• Отправьте фото лица\n" +
-				"• Отправьте второе фото\n" +
-				"• Дождитесь обработки\n\n" +
-				"🎬 Замена лица на видео (2+ монет):\n" +
-				"• Отправьте фото лица\n" +
-				"• Отправьте видео\n" +
-				"• Дождитесь обработки\n\n" +
-				"📊 /status - проверить статус и баланс\n" +
-				"❓ /help - показать это сообщение\n\n" +
-				"📢 Новости и обновления: https://t.me/+HGQVwMhFzIExZDNi"
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, helpMessage)
-			bot.Send(msg)
-			continue
-		}
-
-		// status
-		if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "status") {
-			err = handleStatusCommand(bot, update)
-			if err != nil {
-				log.Printf("Не удалось получить статус пользователя: %v", err)
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Произошла ошибка при получении статуса: %v", err))
-				bot.Send(msg)
-				continue
-			}
-			continue
-		}
-
-		// Обработка получения фотографии
-		if update.Message.Photo != nil {
-			fileID := update.Message.Photo[len(update.Message.Photo)-1].FileID
-
-			// Проверяем, есть ли уже сохраненное фото в сессии
-			if session.FaceFileID != "" {
-				// Второе фото получено - создаем задачу замены лица на фото
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ловлю!")
-				bot.Send(msg)
-
-				jobID, err := createFaceJob(bot, pbUserID, fileID, session.FaceFileID)
+				pbUserID, err := getOrCreateUser(int(userID), userName)
 				if err != nil {
-					log.Printf("Не удалось создать задание на замену лица: %v", err)
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
+					log.Printf("Ошибка при получении/создании пользователя: %v", err)
+					continue
+				}
+
+				// Get session for current user
+				session := getUserSession(int(userID))
+
+				// Приветственное сообщение
+				if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "start") {
+					greeting := fmt.Sprintf(
+						"👋 Привет, %s! Добро пожаловать в бот для создания кружков и замены лиц!\n\n"+
+							"🎯 Что я умею:\n"+
+							"• Создавать кружки из видео (1 монета)\n"+
+							"• Заменять лица на фото (1 монета)\n"+
+							"• Заменять лица на видео (2+ монет)\n\n"+
+							"📚 Подробнее о командах: /help\n"+
+							"📊 Проверить статус: /status\n"+
+							"📢 Новости: https://t.me/+HGQVwMhFzIExZDNi",
+						userName)
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, greeting)
 					bot.Send(msg)
 					continue
 				}
 
-				msg = tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше фото поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
-				bot.Send(msg)
-
-				// Сбрасываем данные сессии
-				session.FaceFileID = ""
-				continue
-			} else {
-				// Первое фото получено - сохраняем и просим второе фото или видео
-				session.FaceFileID = fileID
-
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Получена фотография. Пожалуйста, отправьте видео или второе фото для замены лица.")
-				cancelMarkup := tgbotapi.NewReplyKeyboard(
-					tgbotapi.NewKeyboardButtonRow(
-						tgbotapi.NewKeyboardButton("Отменить"),
-					),
-				)
-				msg.ReplyMarkup = cancelMarkup
-				bot.Send(msg)
-				continue
-			}
-		}
-
-		// Обработка получения видео
-		if update.Message.Video != nil {
-			videoFileID := update.Message.Video.FileID
-
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ловлю!")
-			bot.Send(msg)
-
-			// Проверяем, есть ли фото в сессии пользователя
-			if session.FaceFileID != "" {
-				jobID, err := createFaceJob(bot, pbUserID, videoFileID, session.FaceFileID)
-				if err != nil {
-					log.Printf("Не удалось создать задание на замену лица: %v", err)
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
+				// help
+				if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "help") {
+					helpMessage := "📚 Список доступных команд:\n\n" +
+						"🎥 Создание кружка (1 монета):\n" +
+						"• Отправьте видео\n" +
+						"• Дождитесь обработки\n\n" +
+						"👤 Замена лица на фото (1 монета):\n" +
+						"• Отправьте фото лица\n" +
+						"• Отправьте второе фото\n" +
+						"• Дождитесь обработки\n\n" +
+						"🎬 Замена лица на видео (2+ монет):\n" +
+						"• Отправьте фото лица\n" +
+						"• Отправьте видео\n" +
+						"• Дождитесь обработки\n\n" +
+						"📊 /status - проверить статус и баланс\n" +
+						"❓ /help - показать это сообщение\n\n" +
+						"📢 Новости и обновления: https://t.me/+HGQVwMhFzIExZDNi"
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, helpMessage)
 					bot.Send(msg)
 					continue
 				}
 
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше видео поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
-				bot.Send(msg)
+				// status
+				if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "status") {
+					err = handleStatusCommand(bot, update)
+					if err != nil {
+						log.Printf("Не удалось получить статус пользователя: %v", err)
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Произошла ошибка при получении статуса: %v", err))
+						bot.Send(msg)
+						continue
+					}
+					continue
+				}
 
-				// Сбрасываем данные сессии
-				session.FaceFileID = ""
-				continue
-			} else {
-				jobID, err := createCircleJob(bot, pbUserID, videoFileID)
-				if err != nil {
-					log.Printf("Не удалось создать задание на создание кружочка: %v", err)
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
+				// compress command
+				if update.Message.Text != "" && strings.HasPrefix(strings.ToLower(update.Message.Text), "/compress") {
+					session.WaitingForCompress = true
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Отправьте JPG изображение для сжатия до 12% качества.")
+					cancelMarkup := tgbotapi.NewReplyKeyboard(
+						tgbotapi.NewKeyboardButtonRow(
+							tgbotapi.NewKeyboardButton("Отменить"),
+						),
+					)
+					msg.ReplyMarkup = cancelMarkup
 					bot.Send(msg)
 					continue
 				}
 
-				msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше видео поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
-				bot.Send(msg)
+				// Обработка получения фотографии
+				if update.Message.Photo != nil {
+					fileID := update.Message.Photo[len(update.Message.Photo)-1].FileID
 
-				// Сбрасываем временные данные
-				continue
-			}
-		}
+					// Проверяем режим ожидания сжатия
+					if session.WaitingForCompress {
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Обрабатываю...")
+						bot.Send(msg)
 
-		// Обработка команды отмены
-		if update.Message.Text == "Отменить" {
-			session.FaceFileID = "" // Сбрасываем временные данные в сессии
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Операция отменена.")
-			bot.Send(msg)
+						// Запускаем обработку в горутине
+						go handleCompressImage(bot, update.Message.Chat.ID, pbUserID, fileID)
+
+						// Сбрасываем режим ожидания
+						session.WaitingForCompress = false
+						continue
+					}
+
+					// Проверяем, есть ли уже сохраненное фото в сессии
+					if session.FaceFileID != "" {
+						// Второе фото получено - создаем задачу замены лица на фото
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ловлю!")
+						bot.Send(msg)
+
+						jobID, err := createFaceJob(bot, pbUserID, fileID, session.FaceFileID)
+						if err != nil {
+							log.Printf("Не удалось создать задание на замену лица: %v", err)
+							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
+							bot.Send(msg)
+							continue
+						}
+
+						msg = tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше фото поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
+						bot.Send(msg)
+
+						// Сбрасываем данные сессии
+						session.FaceFileID = ""
+						continue
+					} else {
+						// Первое фото получено - сохраняем и просим второе фото или видео
+						session.FaceFileID = fileID
+
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Получена фотография. Пожалуйста, отправьте видео или второе фото для замены лица.")
+						cancelMarkup := tgbotapi.NewReplyKeyboard(
+							tgbotapi.NewKeyboardButtonRow(
+								tgbotapi.NewKeyboardButton("Отменить"),
+							),
+						)
+						msg.ReplyMarkup = cancelMarkup
+						bot.Send(msg)
+						continue
+					}
+				}
+
+				// Обработка получения видео
+				if update.Message.Video != nil {
+					videoFileID := update.Message.Video.FileID
+
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ловлю!")
+					bot.Send(msg)
+
+					// Проверяем, есть ли фото в сессии пользователя
+					if session.FaceFileID != "" {
+						jobID, err := createFaceJob(bot, pbUserID, videoFileID, session.FaceFileID)
+						if err != nil {
+							log.Printf("Не удалось создать задание на замену лица: %v", err)
+							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
+							bot.Send(msg)
+							continue
+						}
+
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше видео поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
+						bot.Send(msg)
+
+						// Сбрасываем данные сессии
+						session.FaceFileID = ""
+						continue
+					} else {
+						jobID, err := createCircleJob(bot, pbUserID, videoFileID)
+						if err != nil {
+							log.Printf("Не удалось создать задание на создание кружочка: %v", err)
+							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
+							bot.Send(msg)
+							continue
+						}
+
+						msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше видео поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
+						bot.Send(msg)
+
+						// Сбрасываем временные данные
+						continue
+					}
+				}
+
+				// Обработка команды отмены
+				if update.Message.Text == "Отменить" {
+					session.FaceFileID = ""            // Сбрасываем временные данные в сессии
+					session.WaitingForCompress = false // Сбрасываем режим сжатия
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Операция отменена.")
+					bot.Send(msg)
 					continue
 				}
 			}
 		}()
 		log.Println("Bot connection lost, attempting restart...")
 		time.Sleep(30 * time.Second)
-		
+
 		// Reinitialize bot
 		bot, err = initializeBot(BOT_TOKEN, BOT_ENDPOINT)
 		if err != nil {

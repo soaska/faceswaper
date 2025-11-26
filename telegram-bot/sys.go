@@ -17,7 +17,6 @@ import (
 
 // 403 error tracking
 var (
-	forbidden403Count    int
 	forbidden403Mutex    sync.Mutex
 	forbidden403MaxCount = 5
 	forbidden403Window   = 5 * time.Minute
