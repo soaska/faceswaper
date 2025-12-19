@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,8 +20,8 @@ var (
 	GitMessage = "unknown"
 )
 
-// Handle /compress command - compress JPG to 12% quality (FREE for users with positive balance)
-func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, fileID string) {
+// Handle /compress command - compress JPG (FREE for users with positive balance)
+func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, fileID string, quality int) {
 	// Check user has positive balance (feature is free but requires account with coins)
 	userData, err := getUserInfo(int(chatID))
 	if err != nil {
@@ -87,8 +88,8 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, file
 	}
 	defer outputFile.Close()
 
-	// Encode with 12% quality
-	options := &jpeg.Options{Quality: 12}
+	// Encode with specified quality
+	options := &jpeg.Options{Quality: quality}
 	err = jpeg.Encode(outputFile, img, options)
 	if err != nil {
 		log.Printf("Ошибка кодирования изображения: %v", err)
@@ -99,7 +100,7 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, file
 
 	// Send compressed image back
 	photo := tgbotapi.NewPhoto(chatID, tgbotapi.FilePath(outputPath))
-	photo.Caption = "Изображение сжато до 12% качества."
+	photo.Caption = fmt.Sprintf("Изображение сжато до %d%% качества.", quality)
 	_, err = bot.Send(photo)
 	if err != nil {
 		log.Printf("Ошибка отправки сжатого изображения: %v", err)
@@ -268,6 +269,7 @@ func handleResetErrors(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 type UserSession struct {
 	FaceFileID         string // временное хранение ID файла фотографии
 	WaitingForCompress bool   // ожидание фото для сжатия
+	CompressQuality    int    // качество сжатия JPEG (1-100)
 }
 
 // Function to get or create user session
@@ -411,7 +413,13 @@ func main() {
 						"• Отправьте фото лица\n" +
 						"• Отправьте видео\n" +
 						"• Дождитесь обработки\n\n" +
-						"🗜 /compress - сжать JPG изображение до 12% качества (бесплатно)\n\n" +
+						"🗜 /compress [качество] - сжать фото в JPEG (бесплатно):\n" +
+						"• Введите команду с нужным качеством\n" +
+						"• Отправляйте фото для сжатия (можно несколько)\n" +
+						"• Нажмите 'Отменить' или /cancel для выхода\n" +
+						"• Примеры: /compress или /compress 80\n" +
+						"• Качество: 1-100 (по умолчанию 12)\n" +
+						"• Требуется положительный баланс монет\n\n" +
 						"📊 /status - проверить статус и баланс\n" +
 						"❓ /help - показать это сообщение\n\n" +
 						"📢 Новости и обновления: https://t.me/+HGQVwMhFzIExZDNi"
@@ -434,8 +442,22 @@ func main() {
 
 				// compress command
 				if update.Message.Text != "" && strings.HasPrefix(strings.ToLower(update.Message.Text), "/compress") {
+					parts := strings.Fields(update.Message.Text)
+					quality := 12 // default quality
+
+					if len(parts) > 1 {
+						parsedQuality, err := strconv.Atoi(parts[1])
+						if err != nil || parsedQuality < 1 || parsedQuality > 100 {
+							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Неверное значение качества. Используйте число от 1 до 100.\nПример: /compress 80")
+							bot.Send(msg)
+							continue
+						}
+						quality = parsedQuality
+					}
+
 					session.WaitingForCompress = true
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Отправляйте изображения для сжатия до 12% качества.\nНажмите \"Отменить\" или /cancel когда закончите.")
+					session.CompressQuality = quality
+					msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Отправляйте изображения для сжатия до %d%% качества.\nНажмите \"Отменить\" или /cancel когда закончите.", quality))
 					cancelMarkup := tgbotapi.NewReplyKeyboard(
 						tgbotapi.NewKeyboardButtonRow(
 							tgbotapi.NewKeyboardButton("Отменить"),
@@ -456,7 +478,7 @@ func main() {
 						bot.Send(msg)
 
 						// Запускаем обработку в горутине
-						go handleCompressImage(bot, update.Message.Chat.ID, pbUserID, fileID)
+						go handleCompressImage(bot, update.Message.Chat.ID, pbUserID, fileID, session.CompressQuality)
 
 						continue
 					}
