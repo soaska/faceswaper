@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
@@ -46,6 +47,7 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, file
 		bot.Send(msg)
 		return
 	}
+	defer os.Remove(inputPath) // Clean up downloaded file
 
 	// Create cache directory for output
 	cacheDir := "cache"
@@ -274,6 +276,9 @@ type UserSession struct {
 
 // Function to get or create user session
 func getUserSession(userID int) *UserSession {
+	sessionsMutex.Lock()
+	defer sessionsMutex.Unlock()
+
 	if session, ok := userSessions[userID]; ok {
 		return session
 	}
@@ -283,7 +288,10 @@ func getUserSession(userID int) *UserSession {
 }
 
 // Хранилище сессий пользователей
-var userSessions = make(map[int]*UserSession)
+var (
+	userSessions  = make(map[int]*UserSession)
+	sessionsMutex sync.Mutex
+)
 
 func initializeBot(BOT_TOKEN, BOT_ENDPOINT string) (*tgbotapi.BotAPI, error) {
 	var bot *tgbotapi.BotAPI
@@ -334,7 +342,9 @@ func main() {
 	}
 
 	// Clean up any leftover user sessions on restart
+	sessionsMutex.Lock()
 	userSessions = make(map[int]*UserSession)
+	sessionsMutex.Unlock()
 	log.Println("User sessions cleared on restart")
 
 	// updates on telegram API with recovery

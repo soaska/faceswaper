@@ -126,11 +126,13 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 	if err != nil {
 		return "", fmt.Errorf("не удалось скачать видеофайл: %v", err)
 	}
+	defer os.Remove(inputMediaPath) // Clean up temp file
 
 	inputFacePath, err := getTelegramFile(bot, inputFaceFileID)
 	if err != nil {
 		return "", fmt.Errorf("не удалось скачать файл лица: %v", err)
 	}
+	defer os.Remove(inputFacePath) // Clean up temp file
 
 	// file checker
 	inputMediaFile, err := os.Open(inputMediaPath)
@@ -244,6 +246,7 @@ func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID string) (str
 	if err != nil {
 		return "", fmt.Errorf("не удалось скачать видеофайл: %v", err)
 	}
+	defer os.Remove(inputMediaPath) // Clean up temp file
 
 	// file check
 	inputMediaFile, err := os.Open(inputMediaPath)
