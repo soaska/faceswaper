@@ -48,12 +48,12 @@ MODEL_NAME = "inswapper_128.onnx"
 DEVICE_TYPE = os.getenv("DEVICE_TYPE", "cpu").lower()
 WEEK_SECONDS = 7 * 24 * 60 * 60
 HOUR_SECONDS = 60 * 60
-MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(50 * 1024 * 1024)))  # 50MB default
-MAX_VIDEO_BYTES = int(os.getenv("MAX_VIDEO_BYTES", str(200 * 1024 * 1024)))  # 200MB default
+MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", "0"))  # 0 = unlimited (previous behavior)
+MAX_VIDEO_BYTES = int(os.getenv("MAX_VIDEO_BYTES", "0"))  # 0 = unlimited (previous behavior)
 AUTH_SECRET = os.getenv("FACE_SWAP_SECRET", "")
 PUBLIC_BASE_URL = os.getenv("FACE_SWAP_PUBLIC_URL", "").rstrip("/")
-RATE_LIMIT_WINDOW = 60  # seconds
-RATE_LIMIT_MAX = 30     # requests per window per IP
+RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))  # seconds
+RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "0"))     # 0 disables rate limit by default
 
 rate_limiter: Dict[str, List[float]] = {}
 
@@ -67,6 +67,8 @@ def enforce_auth(request: Request):
 
 
 def check_rate_limit(request: Request):
+    if RATE_LIMIT_MAX <= 0 or RATE_LIMIT_WINDOW <= 0:
+        return
     client_ip = request.client.host if request.client else "unknown"
     now = time.time()
     window_start = now - RATE_LIMIT_WINDOW
@@ -638,7 +640,7 @@ async def save_upload_with_limit(upload: UploadFile, dest: Path, max_bytes: int)
             if not chunk:
                 break
             size += len(chunk)
-            if size > max_bytes:
+            if max_bytes > 0 and size > max_bytes:
                 raise HTTPException(status_code=400, detail=f"File exceeds limit {max_bytes} bytes")
             f.write(chunk)
     upload.file.close()

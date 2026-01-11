@@ -21,6 +21,8 @@ var (
 	httpClient = &http.Client{
 		Timeout: 30 * time.Second,
 	}
+	// optional download cap (0 = unlimited, preserves previous behavior)
+	maxDownloadSize int64 = 0
 )
 
 // 403 error tracking
@@ -205,8 +207,10 @@ func downloadFile(url, destination string) error {
 		}
 	}
 
-	const maxDownloadSize = int64(200 * 1024 * 1024) // 200MB hard limit
-	limitedReader := io.LimitReader(resp.Body, maxDownloadSize+1)
+	var limitedReader io.Reader = resp.Body
+	if maxDownloadSize > 0 {
+		limitedReader = io.LimitReader(resp.Body, maxDownloadSize+1)
+	}
 
 	file, err := os.Create(destination)
 	if err != nil {
@@ -218,7 +222,7 @@ func downloadFile(url, destination string) error {
 	if err != nil {
 		return fmt.Errorf("ошибка сохранения файла: %v", err)
 	}
-	if written > maxDownloadSize {
+	if maxDownloadSize > 0 && written > maxDownloadSize {
 		return fmt.Errorf("файл превышает лимит %d байт", maxDownloadSize)
 	}
 

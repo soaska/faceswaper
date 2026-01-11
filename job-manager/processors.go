@@ -465,8 +465,11 @@ func downloadFaceSwapResult(downloadURL string, outputPath string) error {
 		return fmt.Errorf("ошибка загрузки результата face-swap: статус %d, ответ %s", resp.StatusCode, string(body))
 	}
 
-	const maxResultSize = int64(600 * 1024 * 1024)
-	limited := io.LimitReader(resp.Body, maxResultSize+1)
+	var maxResultSize int64 = 0 // 0 = unlimited (previous behavior)
+	var limited io.Reader = resp.Body
+	if maxResultSize > 0 {
+		limited = io.LimitReader(resp.Body, maxResultSize+1)
+	}
 
 	outFile, err := os.Create(outputPath)
 	if err != nil {
@@ -478,7 +481,7 @@ func downloadFaceSwapResult(downloadURL string, outputPath string) error {
 	if err != nil {
 		return fmt.Errorf("ошибка записи результата: %v", err)
 	}
-	if written > maxResultSize {
+	if maxResultSize > 0 && written > maxResultSize {
 		return fmt.Errorf("результат превышает лимит %d байт", maxResultSize)
 	}
 
