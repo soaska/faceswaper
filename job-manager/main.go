@@ -2,18 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
-	"time"
-	"context"
-	"os/signal"
 	"syscall"
+	"time"
 )
 
 // Version info set at build time
@@ -41,7 +41,7 @@ func processCircleJobs(ctx context.Context) {
 			return
 		default:
 		}
-		
+
 		task, err := fetchQueuedJobs("circle_jobs")
 		if err != nil {
 			log.Printf("Ошибка при получении задачи: %v", err)
@@ -147,7 +147,7 @@ func processFaceSwapJobs(ctx context.Context) {
 			return
 		default:
 		}
-		
+
 		task, err := fetchQueuedJobs("face_jobs")
 		if err != nil {
 			log.Printf("Ошибка при получении задачи замены лиц: %v", err)
@@ -238,11 +238,11 @@ func processFaceSwapJobs(ctx context.Context) {
 			log.Printf("Биллинг: %d сек × %d потоков = %d потоко-секунд", realDuration, workerCount, billableDuration)
 
 			// Calculate additional cost based on billable time (standard rounding)
-			additionalCost := int(float64(billableDuration)/20.0 + 0.5)  // standard rounding
+			additionalCost := int(float64(billableDuration)/20.0 + 0.5) // standard rounding
 			totalCost := 2 + additionalCost
 
 			if totalCost > 30 {
-				totalCost = 30  // cap at 30 coins
+				totalCost = 30 // cap at 30 coins
 			}
 
 			// Handle additional coins
@@ -399,16 +399,6 @@ func notifyCircleOwner(task *Task) error {
 
 	log.Printf("Видеосообщение отправлено владельцу задачи %s (Telegram ID: %s).", task.ID, ownerTGID)
 
-	// Увеличиваем счетчик кружков (circle_count) для владельца
-	tgid, err := strconv.Atoi(ownerTGID)
-	if err != nil {
-		return fmt.Errorf("ошибка преобразования telegram id в int: %s", err)
-	}
-	err = incrementCircleCount(tgid)
-	if err != nil {
-		return fmt.Errorf("ошибка обновления circle_count для владельца задачи %s: %v", task.ID, err)
-	}
-
 	return nil
 }
 
@@ -421,13 +411,13 @@ func cleanupTempFiles() {
 	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
 		return
 	}
-	
+
 	files, err := filepath.Glob(filepath.Join(cacheDir, "*"))
 	if err != nil {
 		log.Printf("Ошибка поиска файлов кэша: %v", err)
 		return
 	}
-	
+
 	for _, file := range files {
 		if info, err := os.Stat(file); err == nil {
 			if time.Since(info.ModTime()) > time.Hour {
@@ -462,7 +452,7 @@ func main() {
 	}
 	log.Printf("🚀 Job Manager started")
 	log.Printf("📦 Version: %s - %s", commitShort, GitMessage)
-	
+
 	BOT_TOKEN, _, BOT_ENDPOINT, FaceSwapComponent_URL = LoadEnvironment()
 
 	// Cleanup old temp files on startup

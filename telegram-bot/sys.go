@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,12 @@ import (
 	"github.com/joho/godotenv"
 )
 
+var (
+	httpClient = &http.Client{
+		Timeout: 30 * time.Second,
+	}
+)
+
 // 403 error tracking
 var (
 	forbidden403Mutex    sync.Mutex
@@ -26,7 +33,7 @@ var (
 
 var Err403TooMany = fmt.Errorf("слишком много ошибок 403 при доступе к базе данных")
 
-func track403Error() {
+func track403Error() error {
 	forbidden403Mutex.Lock()
 	defer forbidden403Mutex.Unlock()
 
@@ -45,10 +52,11 @@ func track403Error() {
 		forbidden403Window, len(forbidden403Times), forbidden403MaxCount)
 
 	if len(forbidden403Times) >= forbidden403MaxCount {
-		log.Printf("КРИТИЧЕСКАЯ ОШИБКА: Слишком много ошибок 403 (%d за %v). Завершение программы.",
+		log.Printf("КРИТИЧЕСКАЯ ОШИБКА: Слишком много ошибок 403 (%d за %v). Требуется бэкофф и повторная авторизация.",
 			len(forbidden403Times), forbidden403Window)
-		os.Exit(3)
+		return Err403TooMany
 	}
+	return nil
 }
 
 // PocketBase global credentials
@@ -62,8 +70,10 @@ var (
 
 // just for sending search requests to pocketbase
 func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
-	client := &http.Client{}
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(payload))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +83,7 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", authToken))
 	}
 
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +96,9 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 
 	// Проверка на 403 ошибку
 	if resp.StatusCode == http.StatusForbidden {
-		track403Error()
+		if err := track403Error(); err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("ошибка 403 Forbidden при доступе к базе данных: %s", string(body))
 	}
 
@@ -101,7 +113,15 @@ type FileResponse struct {
 func getTelegramFile(bot *tgbotapi.BotAPI, fileID string) (string, error) {
 	// 1. Get file path info from Telegram API
 	callURL := fmt.Sprintf("%s/bot%s/getFile?file_id=%s", apiEndpoint, bot.Token, fileID)
-	resp, err := http.Get(callURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", callURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("ошибка подготовки запроса: %v", err)
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("ошибка http запроса: %v", err)
 	}
@@ -129,7 +149,15 @@ func getTelegramFile(bot *tgbotapi.BotAPI, fileID string) (string, error) {
 
 	// 2. Download the actual file
 	downloadURL := fmt.Sprintf("%s/file/bot%s/%s", apiEndpoint, bot.Token, filePath)
-	fileResp, err := http.Get(downloadURL)
+	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	req, err = http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("ошибка подготовки запроса скачивания: %v", err)
+	}
+
+	fileResp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("ошибка скачивания файла: %v", err)
 	}
@@ -139,6 +167,10 @@ func getTelegramFile(bot *tgbotapi.BotAPI, fileID string) (string, error) {
 		return "", fmt.Errorf("ошибка скачивания файла, статус: %d", fileResp.StatusCode)
 	}
 
+	if cl := fileResp.ContentLength; cl > 0 && cl > 200*1024*1024 {
+		return "", fmt.Errorf("размер файла превышает лимит 200MB")
+	}
+
 	// 3. Save to temporary file
 	tempFile, err := os.CreateTemp("", "tg_file_*"+filepath.Ext(filePath))
 	if err != nil {
@@ -146,7 +178,15 @@ func getTelegramFile(bot *tgbotapi.BotAPI, fileID string) (string, error) {
 	}
 	defer tempFile.Close()
 
-	_, err = io.Copy(tempFile, fileResp.Body)
+	const maxDownloadSize = int64(200 * 1024 * 1024)
+	limited := io.LimitReader(fileResp.Body, maxDownloadSize+1)
+	written, err := io.Copy(tempFile, limited)
+	if err != nil {
+		return "", fmt.Errorf("ошибка сохранения файла: %v", err)
+	}
+	if written > maxDownloadSize {
+		return "", fmt.Errorf("размер файла превышает лимит 200MB")
+	}
 	if err != nil {
 		return "", fmt.Errorf("ошибка сохранения файла: %v", err)
 	}

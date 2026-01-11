@@ -21,10 +21,9 @@ var (
 	GitMessage = "unknown"
 )
 
-// Handle /compress command - compress JPG (FREE for users with positive balance)
-func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, fileID string, quality int) {
+func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, tgUserID int, fileID string, quality int) {
 	// Check user has positive balance (feature is free but requires account with coins)
-	userData, err := getUserInfo(int(chatID))
+	userData, err := getUserInfo(tgUserID)
 	if err != nil {
 		log.Printf("Ошибка получения данных пользователя: %v", err)
 		msg := tgbotapi.NewMessage(chatID, "Ошибка при проверке баланса.")
@@ -32,7 +31,7 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, file
 		return
 	}
 
-	coins := int(userData["coins"].(float64))
+	coins := int(getNumber(userData, "coins"))
 	if coins <= 0 {
 		msg := tgbotapi.NewMessage(chatID, "Функция сжатия доступна только пользователям с положительным балансом.")
 		bot.Send(msg)
@@ -124,6 +123,11 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 		return fmt.Errorf("ошибка при получении данных о пользователе: %v", err)
 	}
 
+	username := "unknown"
+	if v, ok := userData["username"].(string); ok && v != "" {
+		username = v
+	}
+
 	response := fmt.Sprintf(
 		"📊 Статус пользователя:\n"+
 			"👤 Имя пользователя: %s\n"+
@@ -131,11 +135,11 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 			"💰 Монеты: %d\n"+
 			"🌀 Кружков создано: %d\n"+
 			"💼 Замены лиц: %d\n\n",
-		userData["username"],
+		username,
 		tgUserID,
-		int(userData["coins"].(float64)),
-		int(userData["circle_count"].(float64)),
-		int(userData["face_replace_count"].(float64)),
+		int(getNumber(userData, "coins")),
+		int(getNumber(userData, "circle_count")),
+		int(getNumber(userData, "face_replace_count")),
 	)
 
 	// Получаем активные задачи создания кружков
@@ -191,10 +195,10 @@ func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 			)
 
 			// Add duration and price if available (for completed jobs)
-			if duration, ok := job["duration"].(float64); ok && duration > 0 {
+			if duration := getNumber(job, "duration"); duration > 0 {
 				responseText += fmt.Sprintf("   Длительность: %d сек\n", int(duration))
 			}
-			if price, ok := job["price"].(float64); ok && price > 0 {
+			if price := getNumber(job, "price"); price > 0 {
 				responseText += fmt.Sprintf("   Цена: %d монет\n", int(price))
 			}
 
@@ -316,6 +320,15 @@ func initializeBot(BOT_TOKEN, BOT_ENDPOINT string) (*tgbotapi.BotAPI, error) {
 		return bot, nil
 	}
 	return nil, fmt.Errorf("не удалось инициализировать после 5 попыток: %v", err)
+}
+
+func getNumber(m map[string]interface{}, key string) float64 {
+	if val, ok := m[key]; ok {
+		if f, ok := val.(float64); ok {
+			return f
+		}
+	}
+	return 0
 }
 
 func main() {
@@ -488,7 +501,7 @@ func main() {
 						bot.Send(msg)
 
 						// Запускаем обработку в горутине
-						go handleCompressImage(bot, update.Message.Chat.ID, pbUserID, fileID, session.CompressQuality)
+						go handleCompressImage(bot, update.Message.Chat.ID, pbUserID, int(update.Message.From.ID), fileID, session.CompressQuality)
 
 						continue
 					}

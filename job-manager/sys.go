@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -9,10 +10,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
+)
+
+var (
+	httpClient = &http.Client{
+		Timeout: 30 * time.Second,
+	}
 )
 
 // 403 error tracking
@@ -25,7 +33,7 @@ var (
 
 var Err403TooMany = fmt.Errorf("слишком много ошибок 403 при доступе к базе данных")
 
-func track403Error() {
+func track403Error() error {
 	forbidden403Mutex.Lock()
 	defer forbidden403Mutex.Unlock()
 
@@ -44,10 +52,11 @@ func track403Error() {
 		forbidden403Window, len(forbidden403Times), forbidden403MaxCount)
 
 	if len(forbidden403Times) >= forbidden403MaxCount {
-		log.Printf("КРИТИЧЕСКАЯ ОШИБКА: Слишком много ошибок 403 (%d за %v). Завершение программы.",
+		log.Printf("КРИТИЧЕСКАЯ ОШИБКА: Слишком много ошибок 403 (%d за %v). Требуется бэкофф и повторная авторизация.",
 			len(forbidden403Times), forbidden403Window)
-		os.Exit(3)
+		return Err403TooMany
 	}
+	return nil
 }
 
 // PocketBase global credentials
@@ -64,13 +73,20 @@ var (
 	BOT_ENDPOINT string
 )
 
-// FaceSwapComponent
-var FaceSwapComponent_URL string
+/**
+ * FaceSwapComponent
+ */
+var (
+	FaceSwapComponent_URL   string
+	FaceSwapComponentSecret string
+)
 
 // just for sending search requests to pocketbase
 func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
-	client := &http.Client{}
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(payload))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewBuffer(payload))
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +96,7 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", authToken))
 	}
 
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +109,9 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 
 	// Проверка на 403 ошибку
 	if resp.StatusCode == http.StatusForbidden {
-		track403Error()
+		if err := track403Error(); err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("ошибка 403 Forbidden при доступе к базе данных: %s", string(body))
 	}
 
@@ -149,17 +167,46 @@ func LoadEnvironment() (string, bool, string, string) {
 	if FaceSwapComponentUrl == "" {
 		log.Fatalf("переменная окружения FaceSwapComponent_URL не установлена")
 	}
+	FaceSwapComponentSecret = os.Getenv("FaceSwapComponent_SECRET")
 
 	return bot_token, bot_debug, bot_endpoint, FaceSwapComponentUrl
 }
 
 // Скачивание файла
 func downloadFile(url, destination string) error {
-	resp, err := http.Get(url)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return fmt.Errorf("ошибка подготовки запроса: %v", err)
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("ошибка скачивания: %v", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
+		return fmt.Errorf("ошибка скачивания: статус %d, ответ: %s", resp.StatusCode, string(body))
+	}
+
+	// Basic content-type guard
+	ext := strings.ToLower(filepath.Ext(destination))
+	ct := resp.Header.Get("Content-Type")
+	if ct != "" {
+		if ext == ".mp4" && !strings.HasPrefix(ct, "video") {
+			return fmt.Errorf("недопустимый тип содержимого для видео: %s", ct)
+		}
+		if (ext == ".jpg" || ext == ".jpeg" || ext == ".png") && !strings.HasPrefix(ct, "image") {
+			return fmt.Errorf("недопустимый тип содержимого для изображения: %s", ct)
+		}
+	}
+
+	const maxDownloadSize = int64(200 * 1024 * 1024) // 200MB hard limit
+	limitedReader := io.LimitReader(resp.Body, maxDownloadSize+1)
 
 	file, err := os.Create(destination)
 	if err != nil {
@@ -167,9 +214,12 @@ func downloadFile(url, destination string) error {
 	}
 	defer file.Close()
 
-	_, err = io.Copy(file, resp.Body)
+	written, err := io.Copy(file, limitedReader)
 	if err != nil {
 		return fmt.Errorf("ошибка сохранения файла: %v", err)
+	}
+	if written > maxDownloadSize {
+		return fmt.Errorf("файл превышает лимит %d байт", maxDownloadSize)
 	}
 
 	return nil
@@ -197,14 +247,16 @@ func sendTelegramMessage(chatID string, message string) error {
 		return fmt.Errorf("ошибка закрытия записи multipart данных: %v", err)
 	}
 
-	req, err := http.NewRequest("POST", url, body)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
 	if err != nil {
 		return fmt.Errorf("ошибка создания HTTP-запроса: %v", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("ошибка отправки запроса Telegram API: %v", err)
 	}
@@ -257,14 +309,16 @@ func sendTelegramVideo(chatID string, filePath string) error {
 
 	// Отправляем запрос
 	url := fmt.Sprintf("%s/bot%s/sendVideo", BOT_ENDPOINT, BOT_TOKEN)
-	req, err := http.NewRequest("POST", url, body)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
 	if err != nil {
 		return fmt.Errorf("ошибка создания запроса: %v", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("ошибка отправки запроса: %v", err)
 	}
@@ -317,14 +371,16 @@ func sendTelegramPhoto(chatID string, filePath string) error {
 
 	// Отправляем запрос
 	url := fmt.Sprintf("%s/bot%s/sendPhoto", BOT_ENDPOINT, BOT_TOKEN)
-	req, err := http.NewRequest("POST", url, body)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, body)
 	if err != nil {
 		return fmt.Errorf("ошибка создания запроса: %v", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("ошибка отправки запроса: %v", err)
 	}

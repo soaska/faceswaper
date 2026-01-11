@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"time"
 )
 
 // Process circle creation task
@@ -49,7 +52,15 @@ func processCircleTask(task *Task) error {
 
 // Check face swap server health
 func checkFaceSwapHealth() error {
-	resp, err := http.Get(FaceSwapComponent_URL + "/health")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", FaceSwapComponent_URL+"/health", nil)
+	if err != nil {
+		return fmt.Errorf("ошибка подготовки запроса проверки состояния: %v", err)
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("ошибка проверки состояния сервера замены лиц: %v", err)
 	}
@@ -169,6 +180,7 @@ func processPhotoSwap(task *Task) (int, int, error) {
 // Face swap response structure
 type FaceSwapResponse struct {
 	VideoPath       string `json:"video_path"`
+	DownloadURL     string `json:"download_url"`
 	DurationSeconds int    `json:"duration_seconds"`
 	Filename        string `json:"filename"`
 	MediaType       string `json:"media_type"`
@@ -180,14 +192,15 @@ type FaceSwapResponse struct {
 
 // Photo swap response structure
 type PhotoSwapResponse struct {
-	ImagePath      string `json:"image_path"`
-	DurationSeconds int   `json:"duration_seconds"`
-	Filename       string `json:"filename"`
-	MediaType      string `json:"media_type"`
-	SessionID      string `json:"session_id"`
-	ProcessingTime int    `json:"processing_time"`
-	WorkersUsed    int    `json:"workers_used"`
-	DeviceType     string `json:"device_type"`
+	ImagePath       string `json:"image_path"`
+	DownloadURL     string `json:"download_url"`
+	DurationSeconds int    `json:"duration_seconds"`
+	Filename        string `json:"filename"`
+	MediaType       string `json:"media_type"`
+	SessionID       string `json:"session_id"`
+	ProcessingTime  int    `json:"processing_time"`
+	WorkersUsed     int    `json:"workers_used"`
+	DeviceType      string `json:"device_type"`
 }
 
 // Send files to FaceSwapComponent and get result
@@ -233,14 +246,19 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int,
 	}
 
 	// Send request
-	req, err := http.NewRequest("POST", FaceSwapComponent_URL+"/swap", body)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", FaceSwapComponent_URL+"/swap", body)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка создания запроса к FaceSwapComponent: %v", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if FaceSwapComponentSecret != "" {
+		req.Header.Set("X-API-KEY", FaceSwapComponentSecret)
+	}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка отправки запроса к FaceSwapComponent: %v", err)
 	}
@@ -269,26 +287,20 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int,
 	log.Printf("FaceSwap обработка завершена: сессия %s, устройство %s, потоков %d, время %d сек",
 		swapResponse.SessionID, swapResponse.DeviceType, swapResponse.WorkersUsed, swapResponse.ProcessingTime)
 
-	// Copy video file from temp path to our path
-	sourceVideoFile, err := os.Open(swapResponse.VideoPath)
-	if err != nil {
-		return 0, 0, fmt.Errorf("ошибка открытия видео из ответа: %v", err)
+	downloadURL := swapResponse.DownloadURL
+	if downloadURL == "" {
+		downloadURL = swapResponse.VideoPath
 	}
-	defer sourceVideoFile.Close()
-
-	outFile, err := os.Create(outputPath)
-	if err != nil {
-		return 0, 0, fmt.Errorf("ошибка создания файла результата: %v", err)
-	}
-	defer outFile.Close()
-
-	_, err = io.Copy(outFile, sourceVideoFile)
-	if err != nil {
-		return 0, 0, fmt.Errorf("ошибка копирования результата: %v", err)
+	if !strings.HasPrefix(downloadURL, "http") {
+		downloadURL = strings.TrimRight(FaceSwapComponent_URL, "/") + "/" + strings.TrimLeft(downloadURL, "/")
 	}
 
-	// Check that file is created and has size
-	fileInfo, err := outFile.Stat()
+	if err := downloadFaceSwapResult(downloadURL, outputPath); err != nil {
+		return 0, 0, err
+	}
+
+	// Validate result size
+	fileInfo, err := os.Stat(outputPath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка получения информации о файле: %v", err)
 	}
@@ -342,14 +354,19 @@ func processPhotoSwapComponent(sourceImage, targetImage, outputPath string) (int
 	}
 
 	// Send request
-	req, err := http.NewRequest("POST", FaceSwapComponent_URL+"/swap-photo", body)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", FaceSwapComponent_URL+"/swap-photo", body)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка создания запроса к FaceSwapComponent: %v", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if FaceSwapComponentSecret != "" {
+		req.Header.Set("X-API-KEY", FaceSwapComponentSecret)
+	}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка отправки запроса к FaceSwapComponent: %v", err)
 	}
@@ -378,26 +395,20 @@ func processPhotoSwapComponent(sourceImage, targetImage, outputPath string) (int
 	log.Printf("FaceSwap (фото) обработка завершена: сессия %s, устройство %s, потоков %d, время %d сек",
 		swapResponse.SessionID, swapResponse.DeviceType, swapResponse.WorkersUsed, swapResponse.ProcessingTime)
 
-	// Copy image file from temp path to our path
-	sourceImageResultFile, err := os.Open(swapResponse.ImagePath)
-	if err != nil {
-		return 0, 0, fmt.Errorf("ошибка открытия изображения из ответа: %v", err)
+	downloadURL := swapResponse.DownloadURL
+	if downloadURL == "" {
+		downloadURL = swapResponse.ImagePath
 	}
-	defer sourceImageResultFile.Close()
-
-	outFile, err := os.Create(outputPath)
-	if err != nil {
-		return 0, 0, fmt.Errorf("ошибка создания файла результата: %v", err)
-	}
-	defer outFile.Close()
-
-	_, err = io.Copy(outFile, sourceImageResultFile)
-	if err != nil {
-		return 0, 0, fmt.Errorf("ошибка копирования результата: %v", err)
+	if !strings.HasPrefix(downloadURL, "http") {
+		downloadURL = strings.TrimRight(FaceSwapComponent_URL, "/") + "/" + strings.TrimLeft(downloadURL, "/")
 	}
 
-	// Check that file is created and has size
-	fileInfo, err := outFile.Stat()
+	if err := downloadFaceSwapResult(downloadURL, outputPath); err != nil {
+		return 0, 0, err
+	}
+
+	// Validate result size
+	fileInfo, err := os.Stat(outputPath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка получения информации о файле: %v", err)
 	}
@@ -425,6 +436,50 @@ func processVideo(inputPath, outputPath string) error {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("ошибка ffmpeg: %v, вывод: %s", err, string(output))
+	}
+
+	return nil
+}
+
+// Download face-swap result from component with auth and limits
+func downloadFaceSwapResult(downloadURL string, outputPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	if err != nil {
+		return fmt.Errorf("ошибка подготовки запроса для загрузки результата: %v", err)
+	}
+	if FaceSwapComponentSecret != "" {
+		req.Header.Set("X-API-KEY", FaceSwapComponentSecret)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("ошибка загрузки результата face-swap: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("ошибка загрузки результата face-swap: статус %d, ответ %s", resp.StatusCode, string(body))
+	}
+
+	const maxResultSize = int64(600 * 1024 * 1024)
+	limited := io.LimitReader(resp.Body, maxResultSize+1)
+
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("ошибка создания файла результата: %v", err)
+	}
+	defer outFile.Close()
+
+	written, err := io.Copy(outFile, limited)
+	if err != nil {
+		return fmt.Errorf("ошибка записи результата: %v", err)
+	}
+	if written > maxResultSize {
+		return fmt.Errorf("результат превышает лимит %d байт", maxResultSize)
 	}
 
 	return nil
