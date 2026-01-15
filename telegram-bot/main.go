@@ -26,7 +26,7 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, tgUs
 	userData, err := getUserInfo(tgUserID)
 	if err != nil {
 		log.Printf("Ошибка получения данных пользователя: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка при проверке баланса.")
+		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка при проверке баланса: %v", err))
 		bot.Send(msg)
 		return
 	}
@@ -53,7 +53,7 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, tgUs
 	err = os.MkdirAll(cacheDir, os.ModePerm)
 	if err != nil {
 		log.Printf("Ошибка создания кэша: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка создания временной директории.")
+		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка создания временной директории: %v", err))
 		bot.Send(msg)
 		return
 	}
@@ -65,7 +65,7 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, tgUs
 	imgFile, err := os.Open(inputPath)
 	if err != nil {
 		log.Printf("Ошибка открытия файла: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка открытия изображения.")
+		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка открытия изображения: %v", err))
 		bot.Send(msg)
 		return
 	}
@@ -74,7 +74,7 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, tgUs
 	img, _, err := image.Decode(imgFile)
 	if err != nil {
 		log.Printf("Ошибка декодирования изображения: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка чтения изображения. Убедитесь, что это JPG файл.")
+		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка чтения изображения: %v", err))
 		bot.Send(msg)
 		return
 	}
@@ -83,7 +83,7 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, tgUs
 	outputFile, err := os.Create(outputPath)
 	if err != nil {
 		log.Printf("Ошибка создания выходного файла: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка создания сжатого файла.")
+		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка создания сжатого файла: %v", err))
 		bot.Send(msg)
 		return
 	}
@@ -94,7 +94,7 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, tgUs
 	err = jpeg.Encode(outputFile, img, options)
 	if err != nil {
 		log.Printf("Ошибка кодирования изображения: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка сжатия изображения.")
+		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка сжатия изображения: %v", err))
 		bot.Send(msg)
 		return
 	}
@@ -105,7 +105,7 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, tgUs
 	_, err = bot.Send(photo)
 	if err != nil {
 		log.Printf("Ошибка отправки сжатого изображения: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка отправки сжатого изображения.")
+		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка отправки сжатого изображения: %v", err))
 		bot.Send(msg)
 		return
 	}
@@ -246,8 +246,8 @@ func handleResetErrors(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 
 	// Сбрасываем статусы ошибок
 	for _, job := range faceJobs {
-		if status, ok := job["status"].(string); ok && strings.HasPrefix(status, "error:") {
-			newStatus := fmt.Sprintf("err cleared: %s", strings.TrimPrefix(status, "error:"))
+		if status, ok := job["status"].(string); ok && strings.HasPrefix(status, "error") {
+			newStatus := fmt.Sprintf("err cleared: %s", strings.TrimPrefix(status, "error"))
 			err = updateStatus("face_jobs", job["id"].(string), newStatus)
 			if err != nil {
 				log.Printf("Ошибка обновления статуса задачи %s: %v", job["id"], err)
@@ -256,8 +256,8 @@ func handleResetErrors(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 	}
 
 	for _, job := range circleJobs {
-		if status, ok := job["status"].(string); ok && strings.HasPrefix(status, "error:") {
-			newStatus := fmt.Sprintf("err cleared: %s", strings.TrimPrefix(status, "error:"))
+		if status, ok := job["status"].(string); ok && strings.HasPrefix(status, "error") {
+			newStatus := fmt.Sprintf("err cleared: %s", strings.TrimPrefix(status, "error"))
 			err = updateStatus("circle_jobs", job["id"].(string), newStatus)
 			if err != nil {
 				log.Printf("Ошибка обновления статуса задачи %s: %v", job["id"], err)
@@ -515,7 +515,7 @@ func main() {
 						jobID, err := createFaceJob(bot, pbUserID, fileID, session.FaceFileID)
 						if err != nil {
 							log.Printf("Не удалось создать задание на замену лица: %v", err)
-							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
+							msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Произошла ошибка при создании задания: %v", err))
 							bot.Send(msg)
 							continue
 						}
@@ -554,7 +554,7 @@ func main() {
 						jobID, err := createFaceJob(bot, pbUserID, videoFileID, session.FaceFileID)
 						if err != nil {
 							log.Printf("Не удалось создать задание на замену лица: %v", err)
-							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
+							msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Произошла ошибка при создании задания: %v", err))
 							bot.Send(msg)
 							continue
 						}
@@ -569,7 +569,7 @@ func main() {
 						jobID, err := createCircleJob(bot, pbUserID, videoFileID)
 						if err != nil {
 							log.Printf("Не удалось создать задание на создание кружочка: %v", err)
-							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
+							msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Произошла ошибка при создании задания: %v", err))
 							bot.Send(msg)
 							continue
 						}
