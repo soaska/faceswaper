@@ -246,8 +246,8 @@ func handleResetErrors(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
 
 	// Сбрасываем статусы ошибок
 	for _, job := range faceJobs {
-		if status, ok := job["status"].(string); ok && strings.HasPrefix(status, "error") {
-			newStatus := fmt.Sprintf("err cleared: %s", strings.TrimPrefix(status, "error"))
+		if status, ok := job["status"].(string); ok && strings.HasPrefix(status, "error:") {
+			newStatus := fmt.Sprintf("err cleared: %s", strings.TrimPrefix(status, "error:"))
 			err = updateStatus("face_jobs", job["id"].(string), newStatus)
 			if err != nil {
 				log.Printf("Ошибка обновления статуса задачи %s: %v", job["id"], err)

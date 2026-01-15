@@ -235,7 +235,7 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 		return "", fmt.Errorf("не удалось получить ID новой задачи, ответ: %s", string(respBody))
 	}
 
-	log.Printf("Задача Circle Job успешно создана с ID: %s", jobID)
+	log.Printf("Задача Face Job успешно создана с ID: %s", jobID)
 	return jobID, nil
 }
 
@@ -313,7 +313,7 @@ func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID string) (str
 		return "", fmt.Errorf("ошибка чтения ответа: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ошибка создания face job, код: %d, ответ: %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("ошибка создания circle job, код: %d, ответ: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result map[string]interface{}

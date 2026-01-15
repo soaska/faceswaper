@@ -67,3 +67,6 @@ docker-compose.override.yaml
 # Temporary files
 notes.txt
 *.tmp
+
+# Kilo Code agent worktrees
+.kilocode/worktrees/

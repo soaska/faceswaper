@@ -424,7 +424,7 @@ func processVideo(inputPath, outputPath string) error {
 	cmd := exec.Command(
 		"ffmpeg",
 		"-i", inputPath,
-		"-vf", "crop=min(iw\\,ih):min(iw\\,ih):(iw-min(iw\\,ih))/2:(ih-min(iw\\,ih))/2,scale=512:512",
+		"-vf", "crop=min(iw,ih):min(iw,ih):(iw-min(iw,ih))/2:(ih-min(iw,ih))/2,scale=512:512",
 		"-r", "30",
 		"-t", "60",
 		"-c:v", "libx264",

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
@@ -23,42 +22,6 @@ var (
 	}
 )
 
-// 403 error tracking
-var (
-	forbidden403Mutex    sync.Mutex
-	forbidden403MaxCount = 1
-	forbidden403Window   = 5 * time.Minute
-	forbidden403Times    []time.Time
-)
-
-var Err403TooMany = fmt.Errorf("слишком много ошибок 403 при доступе к базе данных")
-
-func track403Error() error {
-	forbidden403Mutex.Lock()
-	defer forbidden403Mutex.Unlock()
-
-	now := time.Now()
-	cutoff := now.Add(-forbidden403Window)
-	var recent []time.Time
-	for _, t := range forbidden403Times {
-		if t.After(cutoff) {
-			recent = append(recent, t)
-		}
-	}
-	recent = append(recent, now)
-	forbidden403Times = recent
-
-	log.Printf("Ошибка 403 при доступе к базе данных. Количество за последние %v: %d/%d",
-		forbidden403Window, len(forbidden403Times), forbidden403MaxCount)
-
-	if len(forbidden403Times) >= forbidden403MaxCount {
-		log.Printf("КРИТИЧЕСКАЯ ОШИБКА: Слишком много ошибок 403 (%d за %v). Требуется бэкофф и повторная авторизация.",
-			len(forbidden403Times), forbidden403Window)
-		return Err403TooMany
-	}
-	return nil
-}
-
 // PocketBase global credentials
 var (
 	pocketBaseUrl string
@@ -70,6 +33,10 @@ var (
 
 // just for sending search requests to pocketbase
 func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
+	return sendAuthorizedRequestWithRetry(method, url, payload, true)
+}
+
+func sendAuthorizedRequestWithRetry(method, url string, payload []byte, allowRetry bool) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -94,12 +61,18 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// Проверка на 403 ошибку
-	if resp.StatusCode == http.StatusForbidden {
-		if err := track403Error(); err != nil {
-			return nil, err
+	// Check for auth errors and attempt token refresh
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		if allowRetry {
+			log.Printf("Получена ошибка %d, пробуем обновить токен...", resp.StatusCode)
+			if err := authenticatePocketBase(); err != nil {
+				log.Printf("Не удалось обновить токен: %v", err)
+				return nil, fmt.Errorf("ошибка авторизации при доступе к базе данных: %s", string(body))
+			}
+			log.Printf("Токен успешно обновлен, повторяем запрос")
+			return sendAuthorizedRequestWithRetry(method, url, payload, false)
 		}
-		return nil, fmt.Errorf("ошибка 403 Forbidden при доступе к базе данных: %s", string(body))
+		return nil, fmt.Errorf("ошибка %d при доступе к базе данных: %s", resp.StatusCode, string(body))
 	}
 
 	return body, nil
@@ -186,9 +159,6 @@ func getTelegramFile(bot *tgbotapi.BotAPI, fileID string) (string, error) {
 	}
 	if written > maxDownloadSize {
 		return "", fmt.Errorf("размер файла превышает лимит 200MB")
-	}
-	if err != nil {
-		return "", fmt.Errorf("ошибка сохранения файла: %v", err)
 	}
 
 	return tempFile.Name(), nil
