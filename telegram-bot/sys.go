@@ -9,46 +9,13 @@ import (
 	"net/http"
 	"os"
 	"sync"
-	"time"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 	"github.com/joho/godotenv"
 )
 
-// 403 error tracking
-var (
-	forbidden403Mutex    sync.Mutex
-	forbidden403MaxCount = 1
-	forbidden403Window   = 5 * time.Minute
-	forbidden403Times    []time.Time
-)
-
-var Err403TooMany = fmt.Errorf("слишком много ошибок 403 при доступе к базе данных")
-
-func track403Error() {
-	forbidden403Mutex.Lock()
-	defer forbidden403Mutex.Unlock()
-
-	now := time.Now()
-	cutoff := now.Add(-forbidden403Window)
-	var recent []time.Time
-	for _, t := range forbidden403Times {
-		if t.After(cutoff) {
-			recent = append(recent, t)
-		}
-	}
-	recent = append(recent, now)
-	forbidden403Times = recent
-
-	log.Printf("Ошибка 403 при доступе к базе данных. Количество за последние %v: %d/%d",
-		forbidden403Window, len(forbidden403Times), forbidden403MaxCount)
-
-	if len(forbidden403Times) >= forbidden403MaxCount {
-		log.Printf("КРИТИЧЕСКАЯ ОШИБКА: Слишком много ошибок 403 (%d за %v). Завершение программы.",
-			len(forbidden403Times), forbidden403Window)
-		os.Exit(3)
-	}
-}
+// Token refresh mutex to prevent concurrent refresh attempts
+var tokenRefreshMutex sync.Mutex
 
 // PocketBase global credentials
 var (
@@ -59,12 +26,58 @@ var (
 	api_endpint   string
 )
 
-// just for sending search requests to pocketbase
+// refreshToken re-authenticates with PocketBase and updates the authToken
+func refreshToken() error {
+	tokenRefreshMutex.Lock()
+	defer tokenRefreshMutex.Unlock()
+
+	log.Println("PocketBase: Обновление JWT токена...")
+	err := authenticatePocketBase()
+	if err != nil {
+		return fmt.Errorf("не удалось обновить JWT токен: %v", err)
+	}
+	log.Println("PocketBase: JWT токен успешно обновлён")
+	return nil
+}
+
+// sendAuthorizedRequest sends a request to PocketBase with JWT authentication
+// If a 401/403 error occurs, it will refresh the token and retry once
 func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
+	body, statusCode, err := doAuthorizedRequest(method, url, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check for auth errors (401 Unauthorized or 403 Forbidden)
+	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
+		log.Printf("PocketBase: Получен код %d, пробуем обновить токен...", statusCode)
+
+		// Refresh the token
+		if refreshErr := refreshToken(); refreshErr != nil {
+			return nil, fmt.Errorf("ошибка обновления токена после %d: %v", statusCode, refreshErr)
+		}
+
+		// Retry the request with the new token
+		body, statusCode, err = doAuthorizedRequest(method, url, payload)
+		if err != nil {
+			return nil, err
+		}
+
+		// If still getting auth error after refresh, return error
+		if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
+			return nil, fmt.Errorf("ошибка авторизации после обновления токена, код: %d, ответ: %s", statusCode, string(body))
+		}
+	}
+
+	return body, nil
+}
+
+// doAuthorizedRequest performs the actual HTTP request
+func doAuthorizedRequest(method, url string, payload []byte) ([]byte, int, error) {
 	client := &http.Client{}
 	req, err := http.NewRequest(method, url, bytes.NewBuffer(payload))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -74,22 +87,16 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	// Проверка на 403 ошибку
-	if resp.StatusCode == http.StatusForbidden {
-		track403Error()
-		return nil, fmt.Errorf("ошибка 403 Forbidden при доступе к базе данных: %s", string(body))
-	}
-
-	return body, nil
+	return body, resp.StatusCode, nil
 }
 
 type FileResponse struct {

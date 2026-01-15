@@ -146,7 +146,6 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 	defer inputFaceFile.Close()
 
 	// Check size
-	// needed for testing. will be removed.
 	fileInfo, err := inputMediaFile.Stat()
 	if err != nil {
 		return "", fmt.Errorf("не удалось получить информацию о видеофайле: %v", err)
@@ -169,7 +168,7 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 
 	// metadata
 	_ = writer.WriteField("owner", userID)
-	_ = writer.WriteField("status", "queued") // Статус задачи по умолчанию
+	_ = writer.WriteField("status", "queued")
 
 	// Добавляем файлы в request
 	mediaPart, err := writer.CreateFormFile("input_media", fileInfo.Name())
@@ -190,7 +189,6 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 		return "", fmt.Errorf("не удалось загрузить файл лица: %v", err)
 	}
 
-	// Закрываем writer, чтобы завершить формирование multipart
 	err = writer.Close()
 	if err != nil {
 		return "", fmt.Errorf("не удалось завершить формирование multipart: %v", err)
@@ -204,7 +202,7 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 	}
 
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", authToken)) // Добавляем токен авторизации
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", authToken))
 
 	// Выполняем запрос
 	client := &http.Client{}
@@ -233,7 +231,7 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 		return "", fmt.Errorf("не удалось получить ID новой задачи, ответ: %s", string(respBody))
 	}
 
-	log.Printf("Задача Circle Job успешно создана с ID: %s", jobID)
+	log.Printf("Задача Face Job успешно создана с ID: %s", jobID)
 	return jobID, nil
 }
 

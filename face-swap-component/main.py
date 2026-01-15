@@ -6,6 +6,7 @@ import math
 import glob
 import logging
 import subprocess
+import traceback
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import Tuple, List, Optional
@@ -480,9 +481,32 @@ async def swap_faces(
             "device_type": DEVICE_TYPE
         })
         
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is (already have proper detail)
+    except cv2.error as e:
+        error_detail = f"OpenCV error during video processing: {str(e)}"
+        logger.error(f"Session {session_id} - {error_detail}")
+        logger.debug(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=error_detail)
+    except subprocess.CalledProcessError as e:
+        error_detail = f"FFmpeg error: command failed with code {e.returncode}. stderr: {e.stderr if e.stderr else 'N/A'}"
+        logger.error(f"Session {session_id} - {error_detail}")
+        logger.debug(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=error_detail)
+    except FileNotFoundError as e:
+        error_detail = f"File not found: {str(e)}"
+        logger.error(f"Session {session_id} - {error_detail}")
+        raise HTTPException(status_code=500, detail=error_detail)
+    except MemoryError as e:
+        error_detail = f"Out of memory during video processing. Try a smaller video or reduce quality."
+        logger.error(f"Session {session_id} - Memory error: {e}")
+        raise HTTPException(status_code=500, detail=error_detail)
     except Exception as e:
-        logger.error(f"Session {session_id} failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_type = type(e).__name__
+        error_detail = f"{error_type}: {str(e)}"
+        logger.error(f"Session {session_id} failed: {error_detail}")
+        logger.debug(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @app.post("/swap-photo")
@@ -536,9 +560,27 @@ async def swap_faces_photo(
             "device_type": DEVICE_TYPE
         })
 
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is (already have proper detail)
+    except cv2.error as e:
+        error_detail = f"OpenCV error during image processing: {str(e)}"
+        logger.error(f"Photo session {session_id} - {error_detail}")
+        logger.debug(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=error_detail)
+    except FileNotFoundError as e:
+        error_detail = f"File not found: {str(e)}"
+        logger.error(f"Photo session {session_id} - {error_detail}")
+        raise HTTPException(status_code=500, detail=error_detail)
+    except MemoryError as e:
+        error_detail = f"Out of memory during image processing. Try a smaller image."
+        logger.error(f"Photo session {session_id} - Memory error: {e}")
+        raise HTTPException(status_code=500, detail=error_detail)
     except Exception as e:
-        logger.error(f"Photo session {session_id} failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_type = type(e).__name__
+        error_detail = f"{error_type}: {str(e)}"
+        logger.error(f"Photo session {session_id} failed: {error_detail}")
+        logger.debug(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @app.get("/health")
