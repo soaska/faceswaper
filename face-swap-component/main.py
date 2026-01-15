@@ -69,6 +69,74 @@ def build_download_url(path: Path) -> str:
     return str(path)
 
 
+def validate_and_reencode_image(image_path: Path) -> Path:
+    """
+    Validate and re-encode an image using ffmpeg to ensure it's not corrupted.
+    Returns the path to the validated image (same path, re-encoded in place).
+    Raises HTTPException if the image is invalid.
+    """
+    if not image_path.exists():
+        raise HTTPException(status_code=400, detail=f"Image file not found: {image_path}")
+    
+    # Create temp output path
+    temp_output = image_path.parent / f"validated_{image_path.name}"
+    
+    try:
+        # Use ffmpeg to validate and re-encode the image
+        # -y: overwrite output
+        # -i: input file
+        # -vf: video filter (for images, ensures proper decoding)
+        # -q:v 2: high quality JPEG (1-31, lower is better)
+        command = [
+            'ffmpeg', '-y',
+            '-i', str(image_path),
+            '-vf', 'format=rgb24',  # Ensure proper color format
+            '-q:v', '2',  # High quality
+            str(temp_output)
+        ]
+        
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode != 0:
+            logger.error(f"Image validation failed: {result.stderr}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid or corrupted image file. ffmpeg error: {result.stderr[:200]}"
+            )
+        
+        # Check that output was created and has content
+        if not temp_output.exists() or temp_output.stat().st_size == 0:
+            raise HTTPException(status_code=400, detail="Image validation produced empty output")
+        
+        # Replace original with validated version
+        temp_output.replace(image_path)
+        
+        logger.info(f"Image validated and re-encoded: {image_path}")
+        return image_path
+        
+    except subprocess.TimeoutExpired:
+        logger.error(f"Image validation timed out for {image_path}")
+        # Cleanup temp file if it exists
+        if temp_output.exists():
+            temp_output.unlink()
+        raise HTTPException(status_code=400, detail="Image validation timed out - file may be corrupted")
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        if temp_output.exists():
+            temp_output.unlink()
+        raise
+    except Exception as e:
+        logger.error(f"Image validation error: {e}")
+        if temp_output.exists():
+            temp_output.unlink()
+        raise HTTPException(status_code=400, detail=f"Image validation failed: {str(e)}")
+
+
 class VideoProcessor:
     """Advanced video processing with face swapping capabilities."""
 
@@ -493,6 +561,9 @@ async def swap_faces(
         await save_upload_with_limit(source_image, source_path, MAX_IMAGE_BYTES)
         await save_upload_with_limit(target_video, target_path, MAX_VIDEO_BYTES)
 
+        # Validate and re-encode source image to catch corrupted files
+        validate_and_reencode_image(source_path)
+
         max_workers = processor.process_video(source_path, target_path, output_path)
 
         processing_duration = int(time.time() - start_time)
@@ -556,6 +627,9 @@ async def swap_faces_photo(
 
         await save_upload_with_limit(source_image, source_path, MAX_IMAGE_BYTES)
         await save_upload_with_limit(target_image, target_path, MAX_IMAGE_BYTES)
+
+        # Validate and re-encode source image to catch corrupted files
+        validate_and_reencode_image(source_path)
 
         max_workers = processor.process_image(source_path, target_path, output_path)
 
