@@ -52,10 +52,6 @@ MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", "0"))  # 0 = unlimited (previ
 MAX_VIDEO_BYTES = int(os.getenv("MAX_VIDEO_BYTES", "0"))  # 0 = unlimited (previous behavior)
 AUTH_SECRET = os.getenv("FACE_SWAP_SECRET", "")
 PUBLIC_BASE_URL = os.getenv("FACE_SWAP_PUBLIC_URL", "").rstrip("/")
-RATE_LIMIT_WINDOW = int(os.getenv("RATE_LIMIT_WINDOW", "60"))  # seconds
-RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "0"))     # 0 disables rate limit by default
-
-rate_limiter: Dict[str, List[float]] = {}
 
 
 def enforce_auth(request: Request):
@@ -64,20 +60,6 @@ def enforce_auth(request: Request):
     token = request.headers.get("X-API-KEY", "")
     if token != AUTH_SECRET:
         raise HTTPException(status_code=401, detail="Unauthorized")
-
-
-def check_rate_limit(request: Request):
-    if RATE_LIMIT_MAX <= 0 or RATE_LIMIT_WINDOW <= 0:
-        return
-    client_ip = request.client.host if request.client else "unknown"
-    now = time.time()
-    window_start = now - RATE_LIMIT_WINDOW
-    entries = rate_limiter.get(client_ip, [])
-    entries = [t for t in entries if t >= window_start]
-    if len(entries) >= RATE_LIMIT_MAX:
-        raise HTTPException(status_code=429, detail="Too many requests, slow down")
-    entries.append(now)
-    rate_limiter[client_ip] = entries
 
 
 def build_download_url(path: Path) -> str:
@@ -374,15 +356,21 @@ class VideoProcessor:
             ]
 
         try:
-            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=180)
+            result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=300)
             if result.stderr:
                 logger.info(f"ffmpeg finalize stderr: {result.stderr}")
         except subprocess.TimeoutExpired:
             logger.error("ffmpeg finalize timed out")
+            # Cleanup temp file on error
+            if video_path.exists():
+                video_path.unlink()
             raise HTTPException(status_code=500, detail="Video finalize timeout")
         except subprocess.CalledProcessError as e:
             logger.error(f"ffmpeg finalize failed: {e.stderr}")
-            raise HTTPException(status_code=500, detail="Video finalize failed")
+            # Cleanup temp file on error
+            if video_path.exists():
+                video_path.unlink()
+            raise HTTPException(status_code=500, detail=f"Video finalize failed: {e.stderr}")
 
     def process_image(self, source_path: Path, target_path: Path, output_path: Path) -> int:
         """Process single image face swap."""
@@ -490,7 +478,6 @@ async def swap_faces(
 
     try:
         enforce_auth(request)
-        check_rate_limit(request)
 
         file_manager.cleanup_old_files(MEDIA_DIR, HOUR_SECONDS)
 
@@ -553,7 +540,6 @@ async def swap_faces_photo(
 
     try:
         enforce_auth(request)
-        check_rate_limit(request)
 
         file_manager.cleanup_old_files(MEDIA_DIR, HOUR_SECONDS)
 

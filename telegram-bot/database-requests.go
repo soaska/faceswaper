@@ -170,8 +170,12 @@ func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFile
 	writer := multipart.NewWriter(body)
 
 	// metadata
-	_ = writer.WriteField("owner", userID)
-	_ = writer.WriteField("status", "queued") // Статус задачи по умолчанию
+	if err := writer.WriteField("owner", userID); err != nil {
+		return "", fmt.Errorf("не удалось записать поле owner: %v", err)
+	}
+	if err := writer.WriteField("status", "queued"); err != nil {
+		return "", fmt.Errorf("не удалось записать поле status: %v", err)
+	}
 
 	// Добавляем файлы в request
 	mediaPart, err := writer.CreateFormFile("input_media", fileInfo.Name())
@@ -270,8 +274,12 @@ func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID string) (str
 	writer := multipart.NewWriter(body)
 
 	// Добавляем метаданные (например, владелец и статус)
-	_ = writer.WriteField("owner", userID)
-	_ = writer.WriteField("status", "queued") // Статус задачи по умолчанию
+	if err := writer.WriteField("owner", userID); err != nil {
+		return "", fmt.Errorf("не удалось записать поле owner: %v", err)
+	}
+	if err := writer.WriteField("status", "queued"); err != nil {
+		return "", fmt.Errorf("не удалось записать поле status: %v", err)
+	}
 
 	// Добавляем файлы в request
 	mediaPart, err := writer.CreateFormFile("input_media", fileInfo.Name())
