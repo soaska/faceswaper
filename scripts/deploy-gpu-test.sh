@@ -65,7 +65,6 @@ fi
 mkdir -p data/pocketbase data/telegram-bot-api data/face-model-cache
 mkdir -p temp/face-media temp/job-manager
 
-readonly fresh_database=$([[ -f data/pocketbase/data.db ]] && echo 0 || echo 1)
 readonly generated_env=.env.codex-generated
 {
   printf 'COMPOSE_PROJECT_NAME=%s\n' "$project_name"
@@ -90,6 +89,7 @@ source "$generated_env"
 set +a
 
 compose_files=(-f compose.yaml -f compose.test.yaml)
+echo "Запускаю PocketBase..."
 "${compose[@]}" "${compose_files[@]}" up -d --build pocketbase
 
 for attempt in {1..60}; do
@@ -104,13 +104,16 @@ for attempt in {1..60}; do
   sleep 2
 done
 
-if [[ $fresh_database -eq 1 ]]; then
+echo "Проверяю администратора PocketBase..."
+if ! "${compose[@]}" "${compose_files[@]}" exec -T pocketbase sh -ceu \
+  'exec /pb/pocketbase admin update "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data'; then
   "${compose[@]}" "${compose_files[@]}" exec -T pocketbase sh -ceu \
     'exec /pb/pocketbase admin create "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data'
 fi
 
 # The Telegram bot is intentionally absent. See the telegram-e2e profile in
 # compose.test.yaml before starting it against any real token.
+echo "Собираю и запускаю core-сервисы без Telegram poller..."
 "${compose[@]}" "${compose_files[@]}" up -d --build \
   telegram-bot-api face-swap-component job-manager
 
