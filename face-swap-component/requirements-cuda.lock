@@ -79,7 +79,7 @@ numpy==1.26.4
     #   tifffile
 onnx==1.22.0
     # via insightface
-onnxruntime-gpu==1.26.0
+onnxruntime-gpu==1.23.2
     # via -r face-swap-component/requirements-cuda.txt
 opencv-python-headless==4.10.0.84
     # via
