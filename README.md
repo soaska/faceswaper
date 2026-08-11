@@ -1,204 +1,83 @@
-# faceswaper (наконец-то с заменой лиц?)
-Бот телеграм с конструкцией, позволяющей выполнять распределенные вычисления на нескольких устройствах.
-Отдельно запускаются телеграм бот, который отвечает на запросы пользователя, работает с базой данных и
-создает задачи, база данных pocketbase и обработчик задач, который может быть запущен в нескольких
-экземплярах на разных устройствах для ускорения вычислений. В данном примере представлена обработка видео
-с помощью ffmpeg для создания кружочков в телеграме и замена лиц в видео с помощью нейронных сетей.
-При этом не требуется большая мощность, поэтому возможость горизонтального масштабирования не играет роли.
-Играет роль улучшеная модель контроля задач, отслеживания ошибок, которые сохраняются в базе данных с
-графическим интерфейсом. Задачи можно перезапускать, и они не сбрасываются при перезапуске бота.
+# faceswaper
 
-Ссылки: 
-- Бот: [@NoKnAbThBo_Bot](https://t.me/NoKnAbThBo_Bot)
-- Канал: [@tobta_channel](https://t.me/tobta_channel)
+Telegram-бот создаёт видеокружки и выполняет замену лиц на фото и видео. Компоненты разделены намеренно: бот принимает файлы и создаёт задачи, PocketBase хранит очередь и баланс, job-manager арендует и выполняет задачи, face-swap-component запускает InsightFace/ONNX Runtime.
 
-### 1. Telegram Bot (`telegram-bot/`)
-- Обработка команд и сообщений от пользователей
-- Создание задач на обработку видео и замену лиц
-- Сжатие изображений в JPEG с настраиваемым качеством
-- Отправка результатов пользователям
-- Управление балансом монет
-- Отслеживание статуса задач
+## Состав
 
-### 2. Job Manager (`job-manager/`)
-- Обработка очереди задач
-- Управление балансом монет с тредо-секундным биллингом
-- Взаимодействие с FaceSwap API
-- Отправка результатов пользователям
+- `telegram-bot` — команды, меню, загрузка файлов и постановка задач.
+- `job-manager` — lease-based очередь, биллинг, обработка и отправка результата.
+- `face-swap-component` — последовательная покадровая обработка с ограниченной памятью.
+- `pocketbase` — данные, миграции и атомарные hooks очереди/баланса.
 
-### 3. Face Swap Component (`face-swap-component/`)
-- Обработка видео для замены лиц на основе InsightFace
-- Поддержка CPU и NVIDIA GPU (CUDA)  
-- Многопоточная обработка с автоматическим расчетом нагрузки
-- Временные файлы в `/temp` контейнера
-- Автоматическая очистка при запуске
-- JSON API для интеграции с job-manager
+Обычный жизненный цикл задачи: `queued → processing → sending → completed`. Воркер продлевает lease; просроченная задача возвращается в очередь, а после трёх неудачных попыток получает статус ошибки. Списание и возврат монет имеют уникальные ключи операций и не применяются повторно после рестарта.
 
-### 4. PocketBase (`pocketbase/`)
-- База данных и API для хранения:
-  - Информации о пользователях
-  - Баланса монет
-  - Статистики операций
-  - Очереди задач
-  - Статусов обработки
-- Аутентификация и авторизация
-- Управление файлами (видео, фото)
-- REST API для взаимодействия компонентов
-- Веб-интерфейс для администрирования
+## Запуск полного стека
 
----
+Требуются Docker Compose или совместимый Podman Compose и NVIDIA Container Runtime для GPU-варианта.
 
-# Запуск в контейнере
-Скопируем код
-```shell
-git clone https://github.com/soaska/faceswaper.git
-cd faceswaper
-```
-
-Заполним окружение
 ```shell
 cp example.env .env
-vim .env
+# заполнить секреты в .env
+docker-compose up -d --build
 ```
 
-Запустим pocketbase, перейдем по её [url](http://0.0.0.0:8080/_/), создадим пользователя.
+Compose сам задаёт внутренние адреса сервисов. Порты администрирования привязаны только к `127.0.0.1`:
+
+- PocketBase: `http://127.0.0.1:8080/_/`
+- Telegram Bot API: `http://127.0.0.1:8081`
+- статистика Telegram Bot API: `http://127.0.0.1:8082`
+- Face Swap health: `http://127.0.0.1:7860/health`
+
+При первом запуске создайте администратора PocketBase через UI либо CLI контейнера. Значения `POCKETBASE_LOGIN` и `POCKETBASE_PASSWORD` в `.env` должны совпадать с ним. Схема создаётся только миграциями из `pocketbase/collections`; ручной импорт JSON не нужен и не поддерживается.
+
+Для диагностики:
+
 ```shell
-podman compose up pocketbase
+docker-compose ps
+docker-compose logs --tail=200 pocketbase telegram-bot-api telegram-bot job-manager face-swap-component
 ```
 
-Теперь можем запускать бота и воркер.
+Сервисы используют `restart: always`. Это особенно важно для локального Telegram Bot API: без него бот не может ни получать updates, ни отправлять пользователям результаты.
+
+## Face Swap отдельно
+
 ```shell
-podman compose up -d --build
+docker-compose -f face-swap-component/compose.cpu.yaml up --build
+docker-compose -f face-swap-component/compose.nvidia.yaml up --build
 ```
 
-# Запуск (без функций замены лиц)
-Запустим pocketbase по [этой](https://pocketbase.io/docs/) инструкции. Удалим collection `users`.
-Зайдем во вкладку *settings / import* collections. Далее в меню *load from json* выбираем [файл](https://github.com/soaska/faceswaper/blob/main/pocketbase/collections/PB%20Schema.json)
-`pocketbase/collections/PB Schema.json`
+Оба варианта читают `FACE_SWAP_API_KEY` из корневого `.env`. Методы `POST /swap` и `POST /swap-photo` требуют заголовок `X-API-Key`. Результат возвращается непосредственно как поток `video/mp4` или `image/jpeg`; метрики находятся в заголовках `X-Session-ID`, `X-Processing-Duration`, `X-Workers-Used` и `X-Device-Type`.
 
-Скопируем код
-```shell
-git clone https://github.com/soaska/faceswaper.git
-cd faceswaper
-```
-
-Перейдем в *telegram-bot* и заполним окружение
-```shell
-cd telegram-bot
-cp example.env .env
-vim .env
-```
-
-Скопируем `.env` в *job-manager*
-```shell
-cp .env ../job-manager/
-```
-
-Скачаем зависимости и запустим
-```shell
-go mod download
-go run .
-```
-
-Перейдем в *job-manager*, запустим его
-```shell
-cd ../job-manager
-go mod downloadl
-go run .
-```
-
----
-
-# Face Swap Service
-
-Сервис для замены лиц в видео с использованием нейронных сетей. Поддерживает CPU, CUDA.
-
-## Возможности
-
-- Замена лиц в видео с сохранением качества
-- Поддержка различных платформ (CPU, CUDA)
-- Оптимизированная обработка видео
-- Автоматическое определение лиц
-- Сохранение звука из исходного видео
-- Многопоточность с разбивкой на чанки
-- Совместимость с Telegram
-
-## Установка
-
-### CPU версия
-```bash
-docker compose -f face-swap-component/compose.cpu.yaml up --build
-```
-
-### NVIDIA версия
-```bash
-docker compose -f face-swap-component/compose.nvidia.yaml up --build
-```
-
-### Переменные окружения
-
-- `DEVICE_TYPE`: Тип устройства (`cpu`, `nvidia`)
-- `THREADS`: Количество потоков для обработки (0 = автоматический расчет)
-
-### API Endpoints
-
-#### POST /swap
-Замена лиц в видео
-
-Параметры:
-- `source_image`: Изображение с лицом для замены
-- `target_video`: Видео, в котором нужно заменить лица
-
-Ответ:
-```json
-{
-    "video_path": "/temp/media/output_abc123.mp4",
-    "duration_seconds": 42,
-    "filename": "output.mp4", 
-    "media_type": "video/mp4",
-    "session_id": "abc123ef",
-    "processing_time": 42,
-    "workers_used": 2,
-    "device_type": "nvidia"
-}
-```
-
-#### GET /health
-Проверка состояния сервиса
-
-Ответ:
-```json
-{
-    "status": "healthy",
-    "device_type": "cpu|nvidia",
-    "providers": ["CPUExecutionProvider", ...],
-    "onnxruntime_version": "1.16.3",
-    "torch_version": "2.1.0",
-    "gpu_count": 1,
-    "gpu_memory_gb": 8.0
-}
-```
+Пайплайн держит в памяти только текущий кадр. Один процесс API обслуживает одну тяжёлую задачу одновременно; дополнительные запросы ожидают semaphore. Ограничения размера файлов, длительности и разрешения задаются переменными из `example.env`.
 
 ## Биллинг
 
-- **GPU**: Время × Количество потоков (тредо-секунды). 20 тредо-секунд = 1 монета
-- **CPU**: Время ÷ 10 (стандартное округление). 200 секунд = 1 монета
-- В базу данных сохраняется реальное время обработки для статистики
+- видеокружок — 1 монета;
+- замена лица на фото — 1 монета;
+- замена лица на видео — 2 монеты плюс округлённые worker-seconds (`duration × workers / 20`), максимум 30 монет.
 
-## Оптимизации
+Баланс не может уйти ниже нуля. При ошибке обработки или отправки применённые списания возвращаются идемпотентно.
 
-- Использование ONNX Runtime для оптимизации инференса
-- Поддержка CUDA для NVIDIA GPU (3GB VRAM на поток)
-- Оптимизированная обработка видео с сохранением качества
-- Автоматический расчет нагрузки на основе доступной VRAM
+## Локальные проверки
 
----
+```shell
+(cd telegram-bot && go test -race ./... && go vet ./...)
+(cd job-manager && go test -race ./... && go vet ./...)
+(cd face-swap-component && PYTHONPATH=. python3 -m pytest tests -q)
+docker-compose config -q
+```
 
-Бот отвечает на сообщения с помощью компонента *telegram-bot*, задачи выполняются *job-manager*.
-Компоненты связаны базой данных pocketbase, все операции выполняются через нее, ее наличие
-обязательно. Папки `telegram-bot/data` и `job-manager/cache` содержат только временные файлы и
-могут быть удалены в период неактивности программы. job-manager требует ffmpeg.
+## Данные и временные файлы
 
-По вопросам пишите в [issues](https://github.com/soaska/faceswaper/issues) или на почту soaska@cornspace.su.
+- `data/pocketbase` — постоянная база и загруженные файлы.
+- `data/telegram-bot-api` — данные локального Telegram Bot API; эта же директория доступна боту для local-mode файлов.
+- `data/face-model-cache` — кэш детектора InsightFace.
+- `temp/face-media` и `temp/job-manager` — удаляемые рабочие файлы.
 
-[License](license): MPL-2.0
+Не монтируйте каталог поверх `/temp` целиком: swap-модель встроена в образ в `/temp/models`, и такой mount скроет её.
+
+## Лицензии моделей
+
+Код проекта распространяется по [MPL-2.0](license). Код InsightFace имеет собственную лицензию, а предоставляемые авторами pretrained-модели, включая автоматически загружаемый `buffalo_l`, разрешены только для некоммерческих исследовательских целей. Для коммерческого использования нужна отдельно лицензированная модель и проверка условий `inswapper_128.onnx`.
+
+Бот: [@NoKnAbThBo_Bot](https://t.me/NoKnAbThBo_Bot).

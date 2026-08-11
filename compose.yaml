@@ -1,85 +1,107 @@
 services:
-  # own telegram api server
-  # needed to download / upload large files
-  # Container link: https://github.com/aiogram/telegram-bot-api
-  # Info about limitations: https://core.telegram.org/bots/api#using-a-local-bot-api-server
   telegram-bot-api:
-    image: aiogram/telegram-bot-api:latest
-    hostname: tgapi
+    image: ${TELEGRAM_BOT_API_IMAGE:-aiogram/telegram-bot-api:latest}
     environment:
-      - TELEGRAM_LOCAL=1
+      TELEGRAM_LOCAL: "1"
     env_file:
       - .env
     volumes:
       - ./data/telegram-bot-api:/var/lib/telegram-bot-api
     ports:
-      - "8081:8081"
-      - "8082:8082" # statistics
-    restart: unless-stopped
+      - "127.0.0.1:${TELEGRAM_API_PORT:-8081}:8081"
+      - "127.0.0.1:${TELEGRAM_STAT_PORT:-8082}:8082"
+    restart: always
 
   pocketbase:
-    hostname: pocketbase
     build:
       context: ./pocketbase
       dockerfile: Dockerfile
-    restart: unless-stopped
-    ports:
-      - 8080:8080
     volumes:
       - ./data/pocketbase:/pb/pb_data
+    ports:
+      - "127.0.0.1:${POCKETBASE_PORT:-8080}:8080"
+    restart: always
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   face-swap-component:
     build:
       context: ./face-swap-component
       dockerfile: Dockerfile-cuda
     environment:
-      - DEVICE_TYPE=nvidia
-    ports:
-      - "7860:7860"
-    restart: unless-stopped
+      DEVICE_TYPE: nvidia
+      TEMP_DIR: /temp
+      MAX_CONCURRENT_JOBS: "1"
+    env_file:
+      - .env
     volumes:
-      - ./temp:/temp
+      - ./temp/face-media:/temp/media
+      - ./data/face-model-cache:/temp/cache
+    ports:
+      - "127.0.0.1:${FACE_SWAP_PORT:-7860}:7860"
+    restart: always
     runtime: nvidia
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: all
+              count: 1
               capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 5m
 
   job-manager:
     build:
       context: ./job-manager
       dockerfile: Dockerfile
     environment:
-      - DOCKER_BUILD=yas
+      DOCKER_BUILD: "1"
+      TELEGRAM_API: http://telegram-bot-api:8081
+      POCKETBASE_URL: http://pocketbase:8080
+      FaceSwapComponent_URL: http://face-swap-component:7860
+      JOB_CACHE_DIR: /temp/job-manager
     env_file:
       - .env
-    restart: unless-stopped
     volumes:
-      - ./temp:/temp
+      - ./temp/job-manager:/temp/job-manager
+    restart: always
     depends_on:
-      - pocketbase
-      - telegram-bot-api
-      - face-swap-component
+      pocketbase:
+        condition: service_healthy
+      telegram-bot-api:
+        condition: service_started
+      face-swap-component:
+        condition: service_healthy
 
   telegram-bot:
     build:
       context: ./telegram-bot
       dockerfile: Dockerfile
     environment:
-      - DOCKER_BUILD=yas
+      DOCKER_BUILD: "1"
+      TELEGRAM_API: http://telegram-bot-api:8081
+      POCKETBASE_URL: http://pocketbase:8080
+      BOT_CACHE_DIR: /tmp/faceswaper-bot
     env_file:
       - .env
     volumes:
       - ./data/telegram-bot-api:/var/lib/telegram-bot-api
-    restart: unless-stopped
+    restart: always
     depends_on:
-      - pocketbase
-      - telegram-bot-api
+      pocketbase:
+        condition: service_healthy
+      telegram-bot-api:
+        condition: service_started

@@ -3,12 +3,25 @@ services:
     build:
       context: .
       dockerfile: Dockerfile-cpu
-      target: base
     environment:
-      - DEVICE_TYPE=cpu
-      - THREADS=0
-    restart: unless-stopped
+      DEVICE_TYPE: cpu
+      TEMP_DIR: /temp
+      MAX_CONCURRENT_JOBS: "1"
+    env_file:
+      - ../.env
+    restart: always
     ports:
-      - "7860:7860"
+      - "127.0.0.1:${FACE_SWAP_PORT:-7860}:7860"
     volumes:
-      - ./data:/app/temp 
+      - ./data/media:/temp/media
+      - ./data/cache:/temp/cache
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 5m

@@ -52,6 +52,7 @@ face-swap-component/data/
 # IDE and editor files
 .vscode/
 .idea/
+.kilocode/worktrees/
 *.swp
 *.swo
 *~
