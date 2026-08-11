@@ -67,7 +67,7 @@ func processJobs(ctx context.Context, collection string, handler func(context.Co
 }
 
 func handleCircleTask(ctx context.Context, task *Task) {
-	if err := changeTaskCoins(task, "circle_charge", "charge", -circlePrice); err != nil {
+	if err := ensureTaskBalance(task, circlePrice); err != nil {
 		failTask("circle_jobs", task, err)
 		return
 	}
@@ -75,19 +75,22 @@ func handleCircleTask(ctx context.Context, task *Task) {
 	if err := runWithHeartbeat(ctx, "circle_jobs", task, func() error {
 		return processCircleTask(task)
 	}); err != nil {
-		refundTaskCoins(task, "circle_refund", "refund", circlePrice)
+		failTask("circle_jobs", task, err)
+		return
+	}
+	if err := chargeTaskCoins(task, "circle", "circle_charge", circlePrice); err != nil {
 		failTask("circle_jobs", task, err)
 		return
 	}
 
 	if err := updateClaimedStatus("circle_jobs", task.ID, statusSending); err != nil {
-		refundTaskCoins(task, "circle_refund", "refund", circlePrice)
+		refundTaskCoins(task, "circle", "circle_refund", circlePrice)
 		failTask("circle_jobs", task, err)
 		return
 	}
 
 	if err := notifyCircleOwner(task); err != nil {
-		refundTaskCoins(task, "circle_refund", "refund", circlePrice)
+		refundTaskCoins(task, "circle", "circle_refund", circlePrice)
 		failTask("circle_jobs", task, err)
 		return
 	}
@@ -101,7 +104,7 @@ func handleCircleTask(ctx context.Context, task *Task) {
 		UserID:       task.Owner,
 		JobID:        task.ID,
 		Kind:         "circle_complete",
-		OperationKey: completionOperationKey(task),
+		OperationKey: completionOperationKey(task, "circle"),
 		CircleDelta:  1,
 	}); err != nil {
 		log.Printf("Кружок по задаче %s отправлен, но circle_count не обновлён: %v", task.ID, err)
@@ -117,7 +120,7 @@ func handleFaceSwapTask(ctx context.Context, task *Task) {
 		basePrice = photoFaceSwapPrice
 	}
 
-	if err := changeTaskCoins(task, "face_base_charge", "base_charge", -basePrice); err != nil {
+	if err := ensureTaskBalance(task, basePrice); err != nil {
 		failTask("face_jobs", task, err)
 		return
 	}
@@ -130,27 +133,21 @@ func handleFaceSwapTask(ctx context.Context, task *Task) {
 		return err
 	})
 	if processErr != nil {
-		refundTaskCoins(task, "face_base_refund", "base_refund", basePrice)
 		failTask("face_jobs", task, processErr)
 		return
 	}
 
 	totalPrice := calculateFaceSwapPrice(isPhoto, duration, workers)
-	additionalPrice := totalPrice - basePrice
-	if additionalPrice > 0 {
-		if err := changeTaskCoins(task, "face_extra_charge", "extra_charge", -additionalPrice); err != nil {
-			refundTaskCoins(task, "face_base_refund", "base_refund", basePrice)
-			failTask("face_jobs", task, err)
-			return
-		}
-	}
-
 	if err := updateTaskDurationPriceAndThreads(task.ID, duration, totalPrice, workers); err != nil {
 		log.Printf("Не удалось сохранить цену задачи %s: %v", task.ID, err)
 	}
+	if err := chargeTaskCoins(task, "face", "face_charge", totalPrice); err != nil {
+		failTask("face_jobs", task, err)
+		return
+	}
 
 	if err := updateClaimedStatus("face_jobs", task.ID, statusSending); err != nil {
-		refundFaceTask(task, basePrice, additionalPrice)
+		refundTaskCoins(task, "face", "face_refund", totalPrice)
 		failTask("face_jobs", task, err)
 		return
 	}
@@ -167,7 +164,7 @@ func handleFaceSwapTask(ctx context.Context, task *Task) {
 		sendErr = sendVideoToUser(task.Owner, outputPath)
 	}
 	if sendErr != nil {
-		refundFaceTask(task, basePrice, additionalPrice)
+		refundTaskCoins(task, "face", "face_refund", totalPrice)
 		failTask("face_jobs", task, sendErr)
 		return
 	}
@@ -181,7 +178,7 @@ func handleFaceSwapTask(ctx context.Context, task *Task) {
 		UserID:       task.Owner,
 		JobID:        task.ID,
 		Kind:         "face_complete",
-		OperationKey: completionOperationKey(task),
+		OperationKey: completionOperationKey(task, "face"),
 		FaceDelta:    1,
 	}); err != nil {
 		log.Printf("Результат задачи %s отправлен, но face_replace_count не обновлён: %v", task.ID, err)
@@ -205,13 +202,24 @@ func isPhotoTask(task *Task) bool {
 	}
 }
 
-func changeTaskCoins(task *Task, kind, action string, delta int) error {
+func ensureTaskBalance(task *Task, minimum int) error {
+	balance, err := getOwnerBalance(task.Owner)
+	if err != nil {
+		return fmt.Errorf("не удалось проверить баланс: %v", err)
+	}
+	if !canAfford(balance, minimum) {
+		return fmt.Errorf("недостаточно монет. Требуется минимум %d, доступно %d", minimum, balance)
+	}
+	return nil
+}
+
+func chargeTaskCoins(task *Task, scope, kind string, amount int) error {
 	_, err := applyUserOperation(userOperation{
 		UserID:       task.Owner,
 		JobID:        task.ID,
 		Kind:         kind,
-		OperationKey: operationKey(task, action),
-		CoinsDelta:   delta,
+		OperationKey: billingOperationKey(task, scope, "charge"),
+		CoinsDelta:   -amount,
 	})
 	if err != nil {
 		return fmt.Errorf("операция с балансом не выполнена: %v", err)
@@ -219,18 +227,20 @@ func changeTaskCoins(task *Task, kind, action string, delta int) error {
 	return nil
 }
 
-func refundTaskCoins(task *Task, kind, action string, amount int) {
+func refundTaskCoins(task *Task, scope, kind string, amount int) {
 	if amount <= 0 {
 		return
 	}
-	if err := changeTaskCoins(task, kind, action, amount); err != nil {
+	_, err := applyUserOperation(userOperation{
+		UserID:       task.Owner,
+		JobID:        task.ID,
+		Kind:         kind,
+		OperationKey: billingOperationKey(task, scope, "refund"),
+		CoinsDelta:   amount,
+	})
+	if err != nil {
 		log.Printf("Не удалось вернуть %d монет по задаче %s: %v", amount, task.ID, err)
 	}
-}
-
-func refundFaceTask(task *Task, basePrice, additionalPrice int) {
-	refundTaskCoins(task, "face_base_refund", "base_refund", basePrice)
-	refundTaskCoins(task, "face_extra_refund", "extra_refund", additionalPrice)
 }
 
 func failTask(collection string, task *Task, cause error) {

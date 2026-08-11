@@ -1,157 +1,94 @@
-name: If it builds, it probably works.
+name: test-and-build
 
 on:
   push:
-    branches: [ master, main, '**' ]
   pull_request:
-    branches: [ master, main ]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-face-swap-cuda:
+  test-go:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [telegram-bot, job-manager]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache-dependency-path: ${{ matrix.component }}/go.sum
+      - name: Test
+        working-directory: ${{ matrix.component }}
+        run: go test -race ./...
+      - name: Vet
+        working-directory: ${{ matrix.component }}
+        run: go vet ./...
+
+  test-face-swap:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    - name: Build the face-swap CUDA Docker image
-      run: |
-        GIT_COMMIT="${{ github.sha }}"
-        GIT_MESSAGE="${{ github.event.head_commit.message }}"
-        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
-          docker build ./face-swap-component -f ./face-swap-component/Dockerfile-cuda --build-arg GIT_COMMIT="$GIT_COMMIT" --build-arg GIT_MESSAGE="$GIT_MESSAGE" -t ${{ secrets.REGISTRY }}/${{ github.actor }}/face-swap:latest-cuda --provenance=false
-        else
-          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
-          docker build ./face-swap-component -f ./face-swap-component/Dockerfile-cuda --build-arg GIT_COMMIT="$GIT_COMMIT" --build-arg GIT_MESSAGE="$GIT_MESSAGE" -t ${{ secrets.REGISTRY }}/${{ github.actor }}/face-swap:$BRANCH_NAME-cuda --provenance=false
-        fi
-    - uses: docker/login-action@v3
-      with:
-        registry: ${{ secrets.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.TOKEN }}
-    - name: Push the face-swap CUDA Docker image
-      run: |
-        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
-          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/face-swap:latest-cuda
-        else
-          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
-          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/face-swap:$BRANCH_NAME-cuda
-        fi
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: python -m pip install pytest
+      - name: Test bounded-memory pipeline
+        working-directory: face-swap-component
+        env:
+          PYTHONPATH: .
+        run: python -m pytest tests -q
 
-  build-face-swap-cpu:
+  build-images:
+    needs: [test-go, test-face-swap]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: telegram-bot
+            context: ./telegram-bot
+            file: ./telegram-bot/Dockerfile
+            tag: latest
+          - image: job-manager
+            context: ./job-manager
+            file: ./job-manager/Dockerfile
+            tag: latest
+          - image: pocketbase
+            context: ./pocketbase
+            file: ./pocketbase/Dockerfile
+            tag: latest
+          - image: face-swap
+            context: ./face-swap-component
+            file: ./face-swap-component/Dockerfile-cpu
+            tag: latest-cpu
+          - image: face-swap
+            context: ./face-swap-component
+            file: ./face-swap-component/Dockerfile-cuda
+            tag: latest-cuda
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    - name: Build the face-swap CPU Docker image
-      run: |
-        GIT_COMMIT="${{ github.sha }}"
-        GIT_MESSAGE="${{ github.event.head_commit.message }}"
-        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
-          docker build ./face-swap-component -f ./face-swap-component/Dockerfile-cpu --build-arg GIT_COMMIT="$GIT_COMMIT" --build-arg GIT_MESSAGE="$GIT_MESSAGE" -t ${{ secrets.REGISTRY }}/${{ github.actor }}/face-swap:latest-cpu --provenance=false
-        else
-          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
-          docker build ./face-swap-component -f ./face-swap-component/Dockerfile-cpu --build-arg GIT_COMMIT="$GIT_COMMIT" --build-arg GIT_MESSAGE="$GIT_MESSAGE" -t ${{ secrets.REGISTRY }}/${{ github.actor }}/face-swap:$BRANCH_NAME-cpu --provenance=false
-        fi
-    - uses: docker/login-action@v3
-      with:
-        registry: ${{ secrets.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.TOKEN }}
-    - name: Push the face-swap CPU Docker image
-      run: |
-        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
-          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/face-swap:latest-cpu
-        else
-          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
-          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/face-swap:$BRANCH_NAME-cpu
-        fi
-
-
-  build-telegram-bot:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    - name: Build the telegram-bot Docker image
-      run: |
-        GIT_COMMIT="${{ github.sha }}"
-        GIT_MESSAGE="${{ github.event.head_commit.message }}"
-        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
-          docker build ./telegram-bot --build-arg GIT_COMMIT="$GIT_COMMIT" --build-arg GIT_MESSAGE="$GIT_MESSAGE" -t ${{ secrets.REGISTRY }}/${{ github.actor }}/telegram-bot:latest --provenance=false
-        else
-          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
-          docker build ./telegram-bot --build-arg GIT_COMMIT="$GIT_COMMIT" --build-arg GIT_MESSAGE="$GIT_MESSAGE" -t ${{ secrets.REGISTRY }}/${{ github.actor }}/telegram-bot:$BRANCH_NAME --provenance=false
-        fi
-    - uses: docker/login-action@v3
-      with:
-        registry: ${{ secrets.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.TOKEN }}
-    - name: Push the telegram-bot Docker image
-      run: |
-        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
-          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/telegram-bot:latest
-        else
-          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
-          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/telegram-bot:$BRANCH_NAME
-        fi
-
-  build-job-manager:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    - name: Build the job-manager Docker image
-      run: |
-        GIT_COMMIT="${{ github.sha }}"
-        GIT_MESSAGE="${{ github.event.head_commit.message }}"
-        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
-          docker build ./job-manager --build-arg GIT_COMMIT="$GIT_COMMIT" --build-arg GIT_MESSAGE="$GIT_MESSAGE" -t ${{ secrets.REGISTRY }}/${{ github.actor }}/job-manager:latest --provenance=false
-        else
-          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
-          docker build ./job-manager --build-arg GIT_COMMIT="$GIT_COMMIT" --build-arg GIT_MESSAGE="$GIT_MESSAGE" -t ${{ secrets.REGISTRY }}/${{ github.actor }}/job-manager:$BRANCH_NAME --provenance=false
-        fi
-    - uses: docker/login-action@v3
-      with:
-        registry: ${{ secrets.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.TOKEN }}
-    - name: Push the job-manager Docker image
-      run: |
-        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
-          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/job-manager:latest
-        else
-          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
-          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/job-manager:$BRANCH_NAME
-        fi
-
-  build-pocketbase:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    - name: Build the pocketbase Docker image
-      run: |
-        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
-          docker build ./pocketbase -t ${{ secrets.REGISTRY }}/${{ github.actor }}/pocketbase:latest --provenance=false
-        else
-          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
-          docker build ./pocketbase -t ${{ secrets.REGISTRY }}/${{ github.actor }}/pocketbase:$BRANCH_NAME --provenance=false
-        fi
-    - uses: docker/login-action@v3
-      with:
-        registry: ${{ secrets.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.TOKEN }}
-    - name: Push the pocketbase Docker image
-      run: |
-        if [ "${{ github.ref }}" = "refs/heads/master" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
-          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/pocketbase:latest
-        else
-          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's/refs\/heads\///')
-          docker push ${{ secrets.REGISTRY }}/${{ github.actor }}/pocketbase:$BRANCH_NAME
-        fi
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.TOKEN }}
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('{0}/{1}/{2}:{3}', secrets.REGISTRY, github.repository_owner, matrix.image, matrix.tag) || format('local/{0}:{1}', matrix.image, matrix.tag) }}
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
+          provenance: false

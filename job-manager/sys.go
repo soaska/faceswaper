@@ -8,7 +8,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -214,29 +213,28 @@ func sendTelegramPhoto(chatID, filePath string) error {
 }
 
 func sendTelegramFile(method, field, chatID, filePath string) error {
-	file, err := os.Open(filePath)
+	url := fmt.Sprintf("%s/bot%s/%s", BOT_ENDPOINT, BOT_TOKEN, method)
+	resp, err := doStreamingMultipartFileRequest(
+		mediaHTTPClient,
+		http.MethodPost,
+		url,
+		nil,
+		map[string]string{"chat_id": chatID},
+		field,
+		filePath,
+	)
 	if err != nil {
-		return fmt.Errorf("ошибка открытия файла: %v", err)
+		return fmt.Errorf("ошибка запроса Telegram: %v", err)
 	}
-	defer file.Close()
-
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-	if err := writer.WriteField("chat_id", chatID); err != nil {
-		return fmt.Errorf("ошибка добавления chat_id: %v", err)
-	}
-	filePart, err := writer.CreateFormFile(field, filepath.Base(filePath))
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	if err != nil {
-		return fmt.Errorf("ошибка добавления файла в запрос: %v", err)
+		return fmt.Errorf("ошибка чтения ответа Telegram: %v", err)
 	}
-	if _, err := io.Copy(filePart, file); err != nil {
-		return fmt.Errorf("ошибка чтения файла: %v", err)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("Telegram API вернул код %d: %s", resp.StatusCode, limitedBody(responseBody))
 	}
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("ошибка завершения запроса Telegram: %v", err)
-	}
-
-	return sendTelegramRequest(method, writer.FormDataContentType(), body)
+	return nil
 }
 
 func sendTelegramRequest(method, contentType string, body *bytes.Buffer) error {

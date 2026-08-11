@@ -17,12 +17,12 @@ func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error)
 	return fn(request)
 }
 
-func TestOperationKeysAreAttemptScoped(t *testing.T) {
+func TestOperationKeysAreJobScoped(t *testing.T) {
 	task := &Task{ID: "job123", Attempts: 2}
-	if got, want := operationKey(task, "base_charge"), "job123:attempt2:base_charge"; got != want {
-		t.Fatalf("operationKey() = %q, want %q", got, want)
+	if got, want := billingOperationKey(task, "face", "charge"), "face:job123:charge"; got != want {
+		t.Fatalf("billingOperationKey() = %q, want %q", got, want)
 	}
-	if got, want := completionOperationKey(task), "job123:complete"; got != want {
+	if got, want := completionOperationKey(task, "face"), "face:job123:complete"; got != want {
 		t.Fatalf("completionOperationKey() = %q, want %q", got, want)
 	}
 }
@@ -57,6 +57,9 @@ func TestUploadOutputMediaDoesNotCompleteTask(t *testing.T) {
 	var statusField string
 	var uploadedFile string
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.ContentLength > 0 {
+			t.Errorf("upload buffered %d bytes instead of streaming", r.ContentLength)
+		}
 		mediaType, params, err := mimeParseMediaType(r.Header.Get("Content-Type"))
 		if err != nil || mediaType != "multipart/form-data" {
 			t.Errorf("invalid content type: %q, %v", mediaType, err)

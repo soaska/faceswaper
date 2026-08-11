@@ -6,10 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"mime/multipart"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 )
 
@@ -58,28 +55,8 @@ func authenticatePocketBase() error {
 // uploadOutputMedia stores the result but deliberately leaves task status
 // unchanged. A task becomes completed only after Telegram confirms delivery.
 func uploadOutputMedia(collection, taskID, filePath string) error {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Errorf("ошибка открытия файла: %v", err)
-	}
-	defer file.Close()
-
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-	filePart, err := writer.CreateFormFile("output_media", filepath.Base(filePath))
-	if err != nil {
-		return fmt.Errorf("ошибка добавления файла в запрос: %v", err)
-	}
-	if _, err := io.Copy(filePart, file); err != nil {
-		return fmt.Errorf("ошибка чтения файла результата: %v", err)
-	}
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("ошибка завершения multipart-запроса: %v", err)
-	}
-
 	url := fmt.Sprintf("%s/api/collections/%s/records/%s", pocketBaseUrl, collection, taskID)
-	contentType := writer.FormDataContentType()
-	responseBody, statusCode, err := doMultipartAuthorizedRequest(http.MethodPatch, url, contentType, body.Bytes())
+	responseBody, statusCode, err := uploadOutputMediaOnce(url, filePath)
 	if err != nil {
 		return err
 	}
@@ -87,12 +64,7 @@ func uploadOutputMedia(collection, taskID, filePath string) error {
 		refreshMutex.Lock()
 		refreshErr := authenticatePocketBase()
 		if refreshErr == nil {
-			responseBody, statusCode, err = doMultipartAuthorizedRequest(
-				http.MethodPatch,
-				url,
-				contentType,
-				body.Bytes(),
-			)
+			responseBody, statusCode, err = uploadOutputMediaOnce(url, filePath)
 		}
 		refreshMutex.Unlock()
 		if refreshErr != nil {
@@ -108,22 +80,25 @@ func uploadOutputMedia(collection, taskID, filePath string) error {
 	return nil
 }
 
-func doMultipartAuthorizedRequest(method, url, contentType string, body []byte) ([]byte, int, error) {
-	req, err := http.NewRequest(method, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, 0, fmt.Errorf("ошибка создания запроса загрузки: %v", err)
-	}
-	req.Header.Set("Content-Type", contentType)
+func uploadOutputMediaOnce(url, filePath string) ([]byte, int, error) {
+	headers := make(http.Header)
 	if token := currentAuthToken(); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+		headers.Set("Authorization", "Bearer "+token)
 	}
-
-	resp, err := mediaHTTPClient.Do(req)
+	resp, err := doStreamingMultipartFileRequest(
+		mediaHTTPClient,
+		http.MethodPatch,
+		url,
+		headers,
+		nil,
+		"output_media",
+		filePath,
+	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("ошибка загрузки файла: %v", err)
 	}
 	defer resp.Body.Close()
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("ошибка чтения ответа загрузки: %v", err)
 	}
@@ -131,25 +106,44 @@ func doMultipartAuthorizedRequest(method, url, contentType string, body []byte) 
 }
 
 func getOwnerTGID(ownerID string) (string, error) {
+	ownerData, err := getOwnerData(ownerID)
+	if err != nil {
+		return "", err
+	}
+	if ownerData.TGID == 0 {
+		return "", fmt.Errorf("Telegram ID владельца %s не найден", ownerID)
+	}
+	return strconv.FormatInt(ownerData.TGID, 10), nil
+}
+
+func getOwnerBalance(ownerID string) (int, error) {
+	ownerData, err := getOwnerData(ownerID)
+	if err != nil {
+		return 0, err
+	}
+	return ownerData.Coins, nil
+}
+
+type ownerData struct {
+	TGID  int64 `json:"tgid"`
+	Coins int   `json:"coins"`
+}
+
+func getOwnerData(ownerID string) (ownerData, error) {
 	body, err := sendAuthorizedRequest(
 		http.MethodGet,
 		fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, ownerID),
 		nil,
 	)
 	if err != nil {
-		return "", fmt.Errorf("ошибка получения данных о владельце: %v", err)
+		return ownerData{}, fmt.Errorf("ошибка получения данных о владельце: %v", err)
 	}
 
-	var ownerData struct {
-		TGID int `json:"tgid"`
+	var result ownerData
+	if err := json.Unmarshal(body, &result); err != nil {
+		return ownerData{}, fmt.Errorf("ошибка разбора данных о владельце: %v", err)
 	}
-	if err := json.Unmarshal(body, &ownerData); err != nil {
-		return "", fmt.Errorf("ошибка разбора данных о владельце: %v", err)
-	}
-	if ownerData.TGID == 0 {
-		return "", fmt.Errorf("Telegram ID владельца %s не найден", ownerID)
-	}
-	return strconv.Itoa(ownerData.TGID), nil
+	return result, nil
 }
 
 func updateTaskDurationPriceAndThreads(taskID string, duration, price, threads int) error {

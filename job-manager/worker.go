@@ -140,12 +140,12 @@ func applyUserOperation(operation userOperation) (userOperationResult, error) {
 	return result, nil
 }
 
-func operationKey(task *Task, action string) string {
-	return fmt.Sprintf("%s:attempt%d:%s", task.ID, task.Attempts, action)
+func billingOperationKey(task *Task, scope, action string) string {
+	return fmt.Sprintf("%s:%s:%s", scope, task.ID, action)
 }
 
-func completionOperationKey(task *Task) string {
-	return task.ID + ":complete"
+func completionOperationKey(task *Task, scope string) string {
+	return scope + ":" + task.ID + ":complete"
 }
 
 func runWithHeartbeat(ctx context.Context, collection string, task *Task, process func() error) error {

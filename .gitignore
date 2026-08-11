@@ -4,6 +4,8 @@
 *.dll
 *.so
 *.dylib
+/telegram-bot/faceswaper
+/job-manager/job-manager
 
 # Test binary, built with `go test -c`
 *.test
