@@ -13,10 +13,7 @@ import (
 )
 
 // Version info set at build time.
-var (
-	GitCommit  = "unknown"
-	GitMessage = "unknown"
-)
+var GitCommit = "unknown"
 
 // Task contains the PocketBase fields used by the worker.
 type Task struct {
@@ -333,7 +330,7 @@ func main() {
 		commitShort = GitCommit[:8]
 	}
 	log.Println("Job Manager запущен")
-	log.Printf("Версия: %s — %s", commitShort, GitMessage)
+	log.Printf("Версия: %s", commitShort)
 
 	BOT_TOKEN, _, BOT_ENDPOINT, FaceSwapComponent_URL = LoadEnvironment()
 	workerID = initializeWorkerID()

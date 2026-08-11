@@ -275,5 +275,4 @@ async def health_check(request: Request):
         "busy": JOB_SEMAPHORE.locked(),
         "max_concurrent_jobs": MAX_CONCURRENT_JOBS,
         "git_commit": os.getenv("GIT_COMMIT", "unknown"),
-        "git_message": os.getenv("GIT_MESSAGE", "unknown"),
     }

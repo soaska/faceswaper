@@ -33,7 +33,6 @@ RUN wget -q https://github.com/deepinsight/insightface/releases/download/v0.7/in
 
 # Build arguments for version info
 ARG GIT_COMMIT=unknown
-ARG GIT_MESSAGE=unknown
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -41,8 +40,7 @@ ENV PYTHONUNBUFFERED=1 \
     MKL_NUM_THREADS=4 \
     DEVICE_TYPE=cpu \
     MAX_CONCURRENT_JOBS=1 \
-    GIT_COMMIT=${GIT_COMMIT} \
-    GIT_MESSAGE=${GIT_MESSAGE}
+    GIT_COMMIT=${GIT_COMMIT}
 
 # Run application
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1", "--no-proxy-headers"]

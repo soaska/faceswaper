@@ -21,7 +21,6 @@ RUN pip3 install --no-cache-dir -r requirements-cuda.lock
 
 # Build arguments for version info
 ARG GIT_COMMIT=unknown
-ARG GIT_MESSAGE=unknown
 
 WORKDIR /app
 RUN mkdir -p /temp/models /temp/media /temp/cache
@@ -39,7 +38,6 @@ ENV PYTHONUNBUFFERED=1 \
     DEVICE_TYPE=nvidia \
     MAX_CONCURRENT_JOBS=1 \
     LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64:$LD_LIBRARY_PATH \
-    GIT_COMMIT=${GIT_COMMIT} \
-    GIT_MESSAGE=${GIT_MESSAGE}
+    GIT_COMMIT=${GIT_COMMIT}
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1", "--no-proxy-headers"]

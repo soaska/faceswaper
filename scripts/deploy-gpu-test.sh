@@ -20,6 +20,7 @@ esac
 
 readonly script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly project_dir=$(cd -- "$script_dir/.." && pwd)
+readonly git_commit=$(git -C "$project_dir" rev-parse --verify HEAD)
 readonly -a ssh_options=(-o BatchMode=yes -o ConnectTimeout=15)
 
 if [[ ! -f "$project_dir/.env" ]]; then
@@ -44,11 +45,12 @@ rsync -az --delete --stats \
 rsync -az -e "ssh -o BatchMode=yes -o ConnectTimeout=15" \
   "$project_dir/.env" "$remote_host:$remote_target/.env"
 
-ssh "${ssh_options[@]}" "$remote_host" bash -s -- "$remote_target" <<'REMOTE'
+ssh "${ssh_options[@]}" "$remote_host" bash -s -- "$remote_target" "$git_commit" <<'REMOTE'
 set -Eeuo pipefail
 umask 077
 
 readonly target=$1
+readonly git_commit=$2
 readonly project_name=faceswaper-codex-test
 cd -- "$target"
 chown "$(id -u):$(id -g)" .env
@@ -75,6 +77,7 @@ readonly generated_env=.env.codex-generated
   printf 'TELEGRAM_STAT_PORT=18082\n'
   printf 'POCKETBASE_PORT=18080\n'
   printf 'FACE_SWAP_PORT=17860\n'
+  printf 'GIT_COMMIT=%s\n' "$git_commit"
 } >"$generated_env"
 
 if ! grep -Eq '^[[:space:]]*FACE_SWAP_API_KEY[[:space:]]*=[[:space:]]*[^[:space:]]+' .env; then

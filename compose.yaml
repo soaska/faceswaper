@@ -35,6 +35,8 @@ services:
     build:
       context: ./face-swap-component
       dockerfile: Dockerfile-cuda
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     environment:
       DEVICE_TYPE: nvidia
       TEMP_DIR: /temp
@@ -70,6 +72,8 @@ services:
     build:
       context: ./job-manager
       dockerfile: Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     environment:
       DOCKER_BUILD: "1"
       TELEGRAM_API: http://telegram-bot-api:8081
@@ -93,6 +97,8 @@ services:
     build:
       context: ./telegram-bot
       dockerfile: Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     environment:
       DOCKER_BUILD: "1"
       TELEGRAM_API: http://telegram-bot-api:8081

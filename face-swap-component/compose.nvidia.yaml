@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile-cuda
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     environment:
       DEVICE_TYPE: nvidia
       TEMP_DIR: /temp

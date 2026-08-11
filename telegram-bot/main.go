@@ -17,10 +17,7 @@ import (
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
-var (
-	GitCommit  = "unknown"
-	GitMessage = "unknown"
-)
+var GitCommit = "unknown"
 
 var (
 	userSessions    = newSessionStore(sessionTTL)
@@ -564,7 +561,7 @@ func main() {
 		commitShort = GitCommit[:8]
 	}
 	log.Println("Telegram Bot запущен")
-	log.Printf("Версия: %s — %s", commitShort, GitMessage)
+	log.Printf("Версия: %s", commitShort)
 
 	token, debug, endpoint := LoadEnvironment()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
