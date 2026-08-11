@@ -94,13 +94,15 @@ async def save_upload(
     maximum_bytes: int,
 ) -> None:
     written = 0
-    with destination.open("wb") as output:
-        while chunk := await upload.read(1024 * 1024):
-            written += len(chunk)
-            if written > maximum_bytes:
-                raise HTTPException(status_code=413, detail="Файл превышает допустимый размер")
-            output.write(chunk)
-    await upload.close()
+    try:
+        with destination.open("wb") as output:
+            while chunk := await upload.read(1024 * 1024):
+                written += len(chunk)
+                if written > maximum_bytes:
+                    raise HTTPException(status_code=413, detail="Файл превышает допустимый размер")
+                output.write(chunk)
+    finally:
+        await upload.close()
     if written == 0:
         raise HTTPException(status_code=400, detail="Получен пустой файл")
 

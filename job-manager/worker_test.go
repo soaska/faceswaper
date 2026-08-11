@@ -36,6 +36,26 @@ func TestSanitizeWorkerID(t *testing.T) {
 	}
 }
 
+func TestCleanupTaskFilesOnlyRemovesRequestedTask(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("JOB_CACHE_DIR", cacheDir)
+	requested := cacheDir + "/job1_output.mp4"
+	other := cacheDir + "/job10_output.mp4"
+	for _, path := range []string{requested, other} {
+		if err := os.WriteFile(path, []byte("result"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cleanupTaskFiles("job1")
+	if _, err := os.Stat(requested); !os.IsNotExist(err) {
+		t.Fatalf("requested task file still exists: %v", err)
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Fatalf("other task file was removed: %v", err)
+	}
+}
+
 func TestSendAuthorizedRequestRejectsNonSuccessStatus(t *testing.T) {
 	oldClient := apiHTTPClient
 	apiHTTPClient = &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {

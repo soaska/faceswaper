@@ -67,13 +67,14 @@ func processJobs(ctx context.Context, collection string, handler func(context.Co
 }
 
 func handleCircleTask(ctx context.Context, task *Task) {
+	defer cleanupTaskFiles(task.ID)
 	if err := ensureTaskBalance(task, circlePrice); err != nil {
 		failTask("circle_jobs", task, err)
 		return
 	}
 
 	if err := runWithHeartbeat(ctx, "circle_jobs", task, func() error {
-		return processCircleTask(task)
+		return processCircleTask(ctx, task)
 	}); err != nil {
 		failTask("circle_jobs", task, err)
 		return
@@ -114,6 +115,7 @@ func handleCircleTask(ctx context.Context, task *Task) {
 }
 
 func handleFaceSwapTask(ctx context.Context, task *Task) {
+	defer cleanupTaskFiles(task.ID)
 	isPhoto := isPhotoTask(task)
 	basePrice := videoBasePrice
 	if isPhoto {
@@ -129,7 +131,7 @@ func handleFaceSwapTask(ctx context.Context, task *Task) {
 	var workers int
 	processErr := runWithHeartbeat(ctx, "face_jobs", task, func() error {
 		var err error
-		duration, workers, err = processFaceSwapTask(task)
+		duration, workers, err = processFaceSwapTask(ctx, task)
 		return err
 	})
 	if processErr != nil {
@@ -283,6 +285,31 @@ func cleanupTempFiles() {
 			} else {
 				log.Printf("Удалён старый файл кэша: %s", file)
 			}
+		}
+	}
+}
+
+func cleanupTaskFiles(taskID string) {
+	if taskID == "" {
+		return
+	}
+	cacheDir := jobCacheDirectory()
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		log.Printf("Ошибка поиска временных файлов задачи %s: %v", taskID, err)
+		return
+	}
+	prefix := taskID + "_"
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		file := filepath.Join(cacheDir, entry.Name())
+		if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+			log.Printf("Не удалось удалить временный файл задачи %s: %v", taskID, err)
 		}
 	}
 }

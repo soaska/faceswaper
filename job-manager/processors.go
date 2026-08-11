@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -11,10 +12,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Process circle creation task
-func processCircleTask(task *Task) error {
+func processCircleTask(ctx context.Context, task *Task) error {
 	if task.InputMedia == "" {
 		return fmt.Errorf("задача с ID %s не содержит ссылки на input_media", task.ID)
 	}
@@ -34,7 +36,7 @@ func processCircleTask(task *Task) error {
 		return fmt.Errorf("ошибка скачивания файла: %v", err)
 	}
 
-	err = processVideo(inputFilePath, outputFilePath)
+	err = processVideo(ctx, inputFilePath, outputFilePath)
 	if err != nil {
 		return fmt.Errorf("ошибка обработки видео: %v", err)
 	}
@@ -48,8 +50,12 @@ func processCircleTask(task *Task) error {
 }
 
 // Check face swap server health
-func checkFaceSwapHealth() error {
-	resp, err := apiHTTPClient.Get(FaceSwapComponent_URL + "/health")
+func checkFaceSwapHealth(ctx context.Context) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, FaceSwapComponent_URL+"/health", nil)
+	if err != nil {
+		return fmt.Errorf("ошибка создания запроса состояния сервера замены лиц: %v", err)
+	}
+	resp, err := apiHTTPClient.Do(request)
 	if err != nil {
 		return fmt.Errorf("ошибка проверки состояния сервера замены лиц: %v", err)
 	}
@@ -63,29 +69,29 @@ func checkFaceSwapHealth() error {
 }
 
 // Process face swap task - determines media type and routes to appropriate handler
-func processFaceSwapTask(task *Task) (int, int, error) {
+func processFaceSwapTask(ctx context.Context, task *Task) (int, int, error) {
 	if task.InputMedia == "" || task.SourceImage == "" {
 		return 0, 0, fmt.Errorf("задача с ID %s не содержит ссылок на input_media или source_image", task.ID)
 	}
 
 	// Check face swap server health
-	if err := checkFaceSwapHealth(); err != nil {
+	if err := checkFaceSwapHealth(ctx); err != nil {
 		return 0, 0, fmt.Errorf("сервер замены лиц занят: %v", err)
 	}
 
 	// Determine media type by extension
-	ext := filepath.Ext(task.InputMedia)
+	ext := strings.ToLower(filepath.Ext(task.InputMedia))
 	isPhoto := ext == ".jpg" || ext == ".jpeg" || ext == ".png"
 
 	if isPhoto {
-		return processPhotoSwap(task)
+		return processPhotoSwap(ctx, task)
 	} else {
-		return processVideoSwap(task)
+		return processVideoSwap(ctx, task)
 	}
 }
 
 // Process video face swap - returns (realDuration, workerCount, error)
-func processVideoSwap(task *Task) (int, int, error) {
+func processVideoSwap(ctx context.Context, task *Task) (int, int, error) {
 	cacheDir := jobCacheDirectory()
 	err := os.MkdirAll(cacheDir, 0o755)
 	if err != nil {
@@ -111,7 +117,7 @@ func processVideoSwap(task *Task) (int, int, error) {
 	}
 
 	// Get both duration and worker count from face swap component
-	realDuration, workerCount, err := processFaceSwapComponent(imagePath, videoPath, outputPath)
+	realDuration, workerCount, err := processFaceSwapComponent(ctx, imagePath, videoPath, outputPath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка обработки FaceSwapComponent: %v", err)
 	}
@@ -126,7 +132,7 @@ func processVideoSwap(task *Task) (int, int, error) {
 }
 
 // Process photo face swap - returns (processingTime, workerCount, error)
-func processPhotoSwap(task *Task) (int, int, error) {
+func processPhotoSwap(ctx context.Context, task *Task) (int, int, error) {
 	cacheDir := jobCacheDirectory()
 	err := os.MkdirAll(cacheDir, 0o755)
 	if err != nil {
@@ -152,7 +158,7 @@ func processPhotoSwap(task *Task) (int, int, error) {
 	}
 
 	// Process photo swap
-	processingTime, workerCount, err := processPhotoSwapComponent(sourceImagePath, targetImagePath, outputPath)
+	processingTime, workerCount, err := processPhotoSwapComponent(ctx, sourceImagePath, targetImagePath, outputPath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка обработки FaceSwapComponent (фото): %v", err)
 	}
@@ -166,8 +172,9 @@ func processPhotoSwap(task *Task) (int, int, error) {
 	return processingTime, workerCount, nil
 }
 
-func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int, int, error) {
+func processFaceSwapComponent(ctx context.Context, sourceImage, targetVideo, outputPath string) (int, int, error) {
 	return requestFaceSwap(
+		ctx,
 		"/swap",
 		sourceImage,
 		targetVideo,
@@ -177,8 +184,9 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int,
 	)
 }
 
-func processPhotoSwapComponent(sourceImage, targetImage, outputPath string) (int, int, error) {
+func processPhotoSwapComponent(ctx context.Context, sourceImage, targetImage, outputPath string) (int, int, error) {
 	return requestFaceSwap(
+		ctx,
 		"/swap-photo",
 		sourceImage,
 		targetImage,
@@ -188,7 +196,7 @@ func processPhotoSwapComponent(sourceImage, targetImage, outputPath string) (int
 	)
 }
 
-func requestFaceSwap(endpoint, sourcePath, targetPath, targetField, outputPath, expectedMedia string) (int, int, error) {
+func requestFaceSwap(ctx context.Context, endpoint, sourcePath, targetPath, targetField, outputPath, expectedMedia string) (int, int, error) {
 	reader, pipeWriter := io.Pipe()
 	multipartWriter := multipart.NewWriter(pipeWriter)
 	contentType := multipartWriter.FormDataContentType()
@@ -202,7 +210,7 @@ func requestFaceSwap(endpoint, sourcePath, targetPath, targetField, outputPath, 
 		writeResult <- err
 	}()
 
-	req, err := http.NewRequest(http.MethodPost, FaceSwapComponent_URL+endpoint, reader)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, FaceSwapComponent_URL+endpoint, reader)
 	if err != nil {
 		_ = reader.CloseWithError(err)
 		<-writeResult
@@ -302,9 +310,13 @@ func positiveHeaderInt(header http.Header, name string, fallback int) int {
 }
 
 // Process circle video file
-func processVideo(inputPath, outputPath string) error {
-	cmd := exec.Command(
+func processVideo(ctx context.Context, inputPath, outputPath string) error {
+	processCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(
+		processCtx,
 		"ffmpeg",
+		"-y",
 		"-i", inputPath,
 		"-vf", "crop=min(iw\\,ih):min(iw\\,ih):(iw-min(iw\\,ih))/2:(ih-min(iw\\,ih))/2,scale=512:512",
 		"-r", "30",
@@ -317,6 +329,9 @@ func processVideo(inputPath, outputPath string) error {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if processCtx.Err() != nil {
+			return fmt.Errorf("ffmpeg прерван или превысил лимит времени: %v", processCtx.Err())
+		}
 		return fmt.Errorf("ошибка ffmpeg: %v, вывод: %s", err, string(output))
 	}
 

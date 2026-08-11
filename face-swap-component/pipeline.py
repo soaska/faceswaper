@@ -82,6 +82,7 @@ class VideoProcessor:
             raise RuntimeError("Не удалось открыть файл результата для записи")
 
         frame_count = 0
+        swapped_faces = 0
         try:
             while True:
                 has_frame, frame = capture.read()
@@ -92,7 +93,9 @@ class VideoProcessor:
                     raise MediaValidationError(
                         f"Видео длиннее допустимых {self.max_video_seconds} секунд"
                     )
-                writer.write(self._swap_faces(frame, source_face))
+                processed_frame, frame_swaps = self._swap_faces(frame, source_face)
+                swapped_faces += frame_swaps
+                writer.write(processed_frame)
         finally:
             capture.release()
             writer.release()
@@ -100,6 +103,9 @@ class VideoProcessor:
         if frame_count == 0:
             temporary_output.unlink(missing_ok=True)
             raise MediaValidationError("В видео не найдено кадров")
+        if swapped_faces == 0:
+            temporary_output.unlink(missing_ok=True)
+            raise MediaValidationError("В целевом видео не найдено лиц")
 
         try:
             self._finalize_video(temporary_output, target_path, output_path)
@@ -119,7 +125,9 @@ class VideoProcessor:
         if target_image is None:
             raise MediaValidationError("Не удалось открыть целевое изображение")
         self._validate_image_size(target_image)
-        result = self._swap_faces(target_image, source_face)
+        result, swapped_faces = self._swap_faces(target_image, source_face)
+        if swapped_faces == 0:
+            raise MediaValidationError("На целевом изображении не найдено лиц")
         if not self.cv2.imwrite(str(output_path), result):
             raise RuntimeError("Не удалось сохранить обработанное изображение")
         return ProcessingResult(workers_used=1, frames_processed=1)
@@ -140,7 +148,7 @@ class VideoProcessor:
             if int(shape[0]) * int(shape[1]) > self.max_image_pixels:
                 raise MediaValidationError("Слишком большое разрешение изображения")
 
-    def _swap_faces(self, frame: Any, source_face: Any) -> Any:
+    def _swap_faces(self, frame: Any, source_face: Any) -> tuple[Any, int]:
         result = frame
         target_faces = self.face_analyzer.get(frame)
         for target_face in target_faces:
@@ -150,7 +158,7 @@ class VideoProcessor:
                 source_face,
                 paste_back=True,
             )
-        return result
+        return result, len(target_faces)
 
     @staticmethod
     def _face_area(face: Any) -> float:

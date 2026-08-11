@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -70,6 +71,7 @@ func TestRequestFaceSwapStreamsHTTPResult(t *testing.T) {
 	}()
 
 	duration, workers, err := requestFaceSwap(
+		context.Background(),
 		"/swap",
 		sourcePath,
 		targetPath,

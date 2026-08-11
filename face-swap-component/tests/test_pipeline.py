@@ -60,8 +60,8 @@ class FakeCV2:
         self.frames = frames
         self.writer = FakeWriter()
 
-    def imread(self, _):
-        return "source"
+    def imread(self, path):
+        return "source" if "source" in str(path) else "target"
 
     def VideoCapture(self, _):
         self.capture = FakeCapture(self.frames, self)
@@ -137,3 +137,22 @@ def test_video_duration_limit_is_checked_before_processing(tmp_path: Path):
 
     assert cv2.capture.released
     assert cv2.writer.frames == []
+
+
+def test_target_without_faces_is_rejected(tmp_path: Path):
+    class SourceOnlyAnalyzer:
+        @staticmethod
+        def get(frame):
+            if frame == "source":
+                return [SimpleNamespace(bbox=[0, 0, 2, 2])]
+            return []
+
+    cv2 = FakeCV2([])
+    processor = StubProcessor(cv2, SourceOnlyAnalyzer(), FakeSwapper())
+
+    with pytest.raises(MediaValidationError, match="не найдено лиц"):
+        processor.process_image(
+            tmp_path / "source.jpg",
+            tmp_path / "target.jpg",
+            tmp_path / "output.jpg",
+        )
