@@ -13,273 +13,51 @@ import (
 	"strconv"
 )
 
-// getting JWT for pocketbase
 func authenticatePocketBase() error {
-	authData := map[string]string{
+	authData, err := json.Marshal(map[string]string{
 		"identity": email,
 		"password": password,
-	}
-
-	authDataJson, err := json.Marshal(authData)
+	})
 	if err != nil {
 		return fmt.Errorf("ошибка сериализации данных авторизации: %v", err)
 	}
 
-	authURL := fmt.Sprintf("%s/api/admins/auth-with-password", pocketBaseUrl)
-
-	resp, err := http.Post(authURL, "application/json", bytes.NewBuffer(authDataJson))
+	resp, err := apiHTTPClient.Post(
+		pocketBaseUrl+"/api/admins/auth-with-password",
+		"application/json",
+		bytes.NewReader(authData),
+	)
 	if err != nil {
 		return fmt.Errorf("не удалось отправить запрос на авторизацию: %v", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("ошибка чтения ответа при неудачной авторизации: %v", err)
-		}
-		return fmt.Errorf("авторизация не удалась, код %d, ответ: %s", resp.StatusCode, string(body))
-	}
-
-	// getting jwt
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("ошибка чтения тела ответа: %v", err)
+		return fmt.Errorf("ошибка чтения ответа авторизации: %v", err)
 	}
-	var authResponse map[string]interface{}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("авторизация не удалась, код %d: %s", resp.StatusCode, limitedBody(body))
+	}
+
+	var authResponse struct {
+		Token string `json:"token"`
+	}
 	if err := json.Unmarshal(body, &authResponse); err != nil {
-		return fmt.Errorf("ошибка разбора ответа: %v, ответ: %s", err, string(body))
+		return fmt.Errorf("ошибка разбора ответа авторизации: %v", err)
+	}
+	if authResponse.Token == "" {
+		return fmt.Errorf("PocketBase не вернул токен")
 	}
 
-	token, ok := authResponse["token"].(string)
-	if !ok || token == "" {
-		return fmt.Errorf("не удалось получить токен из ответа: %s", string(body))
-	}
-
-	authToken = token
-	log.Println("PocketBase: Авторизация прошла успешно. Получен токен от PocketBase.")
+	setAuthToken(authResponse.Token)
+	log.Println("PocketBase: авторизация прошла успешно")
 	return nil
 }
 
-func getUserInfo(tgUserID int) (map[string]interface{}, error) {
-	// Поиск пользователя в PocketBase по tgid
-	searchURL := fmt.Sprintf("%s/api/collections/users/records?filter=tgid=%d", pocketBaseUrl, tgUserID)
-	resp, err := sendAuthorizedRequest("GET", searchURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка при запросе пользователя: %v", err)
-	}
-
-	var searchResult map[string]interface{}
-	if err := json.Unmarshal(resp, &searchResult); err != nil {
-		return nil, fmt.Errorf("ошибка разбора ответа при получении пользователя: %v", err)
-	}
-
-	if items, ok := searchResult["items"].([]interface{}); ok && len(items) > 0 {
-		if user, ok := items[0].(map[string]interface{}); ok {
-			return user, nil
-		}
-	}
-
-	return nil, fmt.Errorf("пользователь с Telegram ID %d не найден", tgUserID)
-}
-
-// Увеличение circle_count на 1 для владельца задачи
-func incrementCircleCount(tgUserID int) error {
-	userInfo, err := getUserInfo(tgUserID)
-	if err != nil {
-		return fmt.Errorf("ошибка получения информации о пользователе с Telegram ID %d: %v", tgUserID, err)
-	}
-	currentCircleCount, ok := userInfo["circle_count"].(float64) // JSON numbers в Go парсятся в float64
-	if !ok {
-		currentCircleCount = 0
-	}
-
-	newCircleCount := int(currentCircleCount) + 1
-
-	updateData := map[string]interface{}{
-		"circle_count": newCircleCount,
-	}
-
-	userID, ok := userInfo["id"].(string)
-	if !ok {
-		return fmt.Errorf("не удалось извлечь ID пользователя с Telegram ID %d", tgUserID)
-	}
-
-	updateURL := fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID)
-
-	jsonData, err := json.Marshal(updateData)
-	if err != nil {
-		return fmt.Errorf("ошибка сериализации данных для обновления: %v", err)
-	}
-
-	_, err = sendAuthorizedRequest("PATCH", updateURL, jsonData)
-	if err != nil {
-		return fmt.Errorf("ошибка обновления circle_count для пользователя %s: %v", userID, err)
-	}
-
-	// log.Printf("circle_count для пользователя с Telegram ID %d успешно обновлен. Новое значение: %d", tgUserID, newCircleCount)
-	return nil
-}
-
-// Увеличение face_replace_count на 1 для владельца задачи
-func incrementFaceReplaceCount(tgUserID int) error {
-	userInfo, err := getUserInfo(tgUserID)
-	if err != nil {
-		return fmt.Errorf("ошибка получения информации о пользователе с Telegram ID %d: %v", tgUserID, err)
-	}
-	currentFaceReplaceCount, ok := userInfo["face_replace_count"].(float64)
-	if !ok {
-		currentFaceReplaceCount = 0
-	}
-
-	newFaceReplaceCount := int(currentFaceReplaceCount) + 1
-
-	updateData := map[string]interface{}{
-		"face_replace_count": newFaceReplaceCount,
-	}
-
-	userID, ok := userInfo["id"].(string)
-	if !ok {
-		return fmt.Errorf("не удалось извлечь ID пользователя с Telegram ID %d", tgUserID)
-	}
-
-	updateURL := fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID)
-
-	jsonData, err := json.Marshal(updateData)
-	if err != nil {
-		return fmt.Errorf("ошибка сериализации данных для обновления: %v", err)
-	}
-
-	_, err = sendAuthorizedRequest("PATCH", updateURL, jsonData)
-	if err != nil {
-		return fmt.Errorf("ошибка обновления face_replace_count для пользователя %s: %v", userID, err)
-	}
-
-	return nil
-}
-
-// Проверка и списание монет
-func checkAndDeductCoins(tgUserID int, cost int) (int, error) {
-	userInfo, err := getUserInfo(tgUserID)
-	if err != nil {
-		return 0, fmt.Errorf("ошибка получения информации о пользователе с Telegram ID %d: %v", tgUserID, err)
-	}
-
-	currentCoins, ok := userInfo["coins"].(float64)
-	if !ok {
-		currentCoins = 0
-	}
-
-	if int(currentCoins) < cost {
-		return 0, fmt.Errorf("недостаточно монет. Требуется: %d, доступно: %d", cost, int(currentCoins))
-	}
-
-	newCoins := int(currentCoins) - cost
-
-	updateData := map[string]interface{}{
-		"coins": newCoins,
-	}
-
-	userID, ok := userInfo["id"].(string)
-	if !ok {
-		return 0, fmt.Errorf("не удалось извлечь ID пользователя с Telegram ID %d", tgUserID)
-	}
-
-	updateURL := fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID)
-
-	jsonData, err := json.Marshal(updateData)
-	if err != nil {
-		return 0, fmt.Errorf("ошибка сериализации данных для обновления: %v", err)
-	}
-
-	_, err = sendAuthorizedRequest("PATCH", updateURL, jsonData)
-	if err != nil {
-		return 0, fmt.Errorf("ошибка обновления coins для пользователя %s: %v", userID, err)
-	}
-
-	return cost, nil
-}
-
-// Force deduct coins even if it results in negative balance
-func forceDeductCoins(tgUserID int, cost int) error {
-	userInfo, err := getUserInfo(tgUserID)
-	if err != nil {
-		return fmt.Errorf("ошибка получения информации о пользователе с Telegram ID %d: %v", tgUserID, err)
-	}
-
-	currentCoins, ok := userInfo["coins"].(float64)
-	if !ok {
-		currentCoins = 0
-	}
-
-	newCoins := int(currentCoins) - cost
-
-	updateData := map[string]interface{}{
-		"coins": newCoins,
-	}
-
-	userID, ok := userInfo["id"].(string)
-	if !ok {
-		return fmt.Errorf("не удалось извлечь ID пользователя с Telegram ID %d", tgUserID)
-	}
-
-	updateURL := fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID)
-
-	jsonData, err := json.Marshal(updateData)
-	if err != nil {
-		return fmt.Errorf("ошибка сериализации данных для обновления: %v", err)
-	}
-
-	_, err = sendAuthorizedRequest("PATCH", updateURL, jsonData)
-	if err != nil {
-		return fmt.Errorf("ошибка обновления coins для пользователя %s: %v", userID, err)
-	}
-
-	return nil
-}
-
-// Refund coins to user
-func refundCoins(tgUserID int, amount int) error {
-	userInfo, err := getUserInfo(tgUserID)
-	if err != nil {
-		return fmt.Errorf("ошибка получения информации о пользователе с Telegram ID %d: %v", tgUserID, err)
-	}
-
-	currentCoins, ok := userInfo["coins"].(float64)
-	if !ok {
-		currentCoins = 0
-	}
-
-	newCoins := int(currentCoins) + amount
-
-	updateData := map[string]interface{}{
-		"coins": newCoins,
-	}
-
-	userID, ok := userInfo["id"].(string)
-	if !ok {
-		return fmt.Errorf("не удалось извлечь ID пользователя с Telegram ID %d", tgUserID)
-	}
-
-	updateURL := fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID)
-
-	jsonData, err := json.Marshal(updateData)
-	if err != nil {
-		return fmt.Errorf("ошибка сериализации данных для обновления: %v", err)
-	}
-
-	_, err = sendAuthorizedRequest("PATCH", updateURL, jsonData)
-	if err != nil {
-		return fmt.Errorf("ошибка обновления coins для пользователя %s: %v", userID, err)
-	}
-
-	return nil
-}
-
-// Загрузка обработанного файла в output_media
+// uploadOutputMedia stores the result but deliberately leaves task status
+// unchanged. A task becomes completed only after Telegram confirms delivery.
 func uploadOutputMedia(collection, taskID, filePath string) error {
-	url := fmt.Sprintf("%s/api/collections/%s/records/%s", pocketBaseUrl, collection, taskID)
-
 	file, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("ошибка открытия файла: %v", err)
@@ -288,54 +66,76 @@ func uploadOutputMedia(collection, taskID, filePath string) error {
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-
-	// Добавляем файл
 	filePart, err := writer.CreateFormFile("output_media", filepath.Base(filePath))
 	if err != nil {
 		return fmt.Errorf("ошибка добавления файла в запрос: %v", err)
 	}
-	_, err = io.Copy(filePart, file)
-	if err != nil {
-		return fmt.Errorf("ошибка копирования содержимого файла: %v", err)
+	if _, err := io.Copy(filePart, file); err != nil {
+		return fmt.Errorf("ошибка чтения файла результата: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("ошибка завершения multipart-запроса: %v", err)
 	}
 
-	// Завершаем формирование multipart
-	writer.WriteField("status", "completed")
-	err = writer.Close()
+	url := fmt.Sprintf("%s/api/collections/%s/records/%s", pocketBaseUrl, collection, taskID)
+	contentType := writer.FormDataContentType()
+	responseBody, statusCode, err := doMultipartAuthorizedRequest(http.MethodPatch, url, contentType, body.Bytes())
 	if err != nil {
-		return fmt.Errorf("ошибка завершения multipart: %v", err)
+		return err
 	}
-
-	request, err := http.NewRequest("PATCH", url, body)
-	if err != nil {
-		return fmt.Errorf("ошибка создания запроса: %v", err)
-	}
-
-	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", authToken))
-	request.Header.Set("Content-Type", writer.FormDataContentType())
-	client := &http.Client{}
-
-	resp, err := client.Do(request)
-	if err != nil {
-		return fmt.Errorf("ошибка отправки запроса: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("ошибка чтения ответа при ошибке загрузки: %v", err)
+	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
+		refreshMutex.Lock()
+		refreshErr := authenticatePocketBase()
+		if refreshErr == nil {
+			responseBody, statusCode, err = doMultipartAuthorizedRequest(
+				http.MethodPatch,
+				url,
+				contentType,
+				body.Bytes(),
+			)
 		}
-		return fmt.Errorf("ошибка загрузки файла: статус %d, ответ: %s", resp.StatusCode, string(respBody))
+		refreshMutex.Unlock()
+		if refreshErr != nil {
+			return fmt.Errorf("ошибка обновления авторизации PocketBase: %v", refreshErr)
+		}
+		if err != nil {
+			return err
+		}
 	}
-
+	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("ошибка загрузки файла, код %d: %s", statusCode, limitedBody(responseBody))
+	}
 	return nil
 }
 
-// Получение Telegram ID владельца
+func doMultipartAuthorizedRequest(method, url, contentType string, body []byte) ([]byte, int, error) {
+	req, err := http.NewRequest(method, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, fmt.Errorf("ошибка создания запроса загрузки: %v", err)
+	}
+	req.Header.Set("Content-Type", contentType)
+	if token := currentAuthToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := mediaHTTPClient.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("ошибка загрузки файла: %v", err)
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("ошибка чтения ответа загрузки: %v", err)
+	}
+	return responseBody, resp.StatusCode, nil
+}
+
 func getOwnerTGID(ownerID string) (string, error) {
-	url := fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, ownerID)
-	body, err := sendAuthorizedRequest("GET", url, nil)
+	body, err := sendAuthorizedRequest(
+		http.MethodGet,
+		fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, ownerID),
+		nil,
+	)
 	if err != nil {
 		return "", fmt.Errorf("ошибка получения данных о владельце: %v", err)
 	}
@@ -343,82 +143,31 @@ func getOwnerTGID(ownerID string) (string, error) {
 	var ownerData struct {
 		TGID int `json:"tgid"`
 	}
-
-	err = json.Unmarshal(body, &ownerData)
-	if err != nil {
+	if err := json.Unmarshal(body, &ownerData); err != nil {
 		return "", fmt.Errorf("ошибка разбора данных о владельце: %v", err)
 	}
-
 	if ownerData.TGID == 0 {
-		return "", fmt.Errorf("telegram id владельца %s не найден", ownerID)
+		return "", fmt.Errorf("Telegram ID владельца %s не найден", ownerID)
 	}
-
 	return strconv.Itoa(ownerData.TGID), nil
 }
 
-// Получение задачи в статусе "queued"
-func fetchQueuedJobs(collection string) (*Task, error) {
-	filter := "status='queued'"
-	url := fmt.Sprintf("%s/api/collections/%s/records?filter=%s&perPage=1&sort=created", pocketBaseUrl, collection, filter)
-
-	body, err := sendAuthorizedRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка при запросе задач: %v", err)
-	}
-
-	var response struct {
-		Items []Task `json:"items"`
-	}
-
-	err = json.Unmarshal(body, &response)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка разбора JSON: %v", err)
-	}
-
-	if len(response.Items) > 0 {
-		return &response.Items[0], nil
-	}
-
-	return nil, nil
-}
-
-// Update task status
-func updateStatus(collection, taskID, status string) error {
-	url := fmt.Sprintf("%s/api/collections/%s/records/%s", pocketBaseUrl, collection, taskID)
-
-	data := map[string]string{
-		"status": status,
-	}
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return fmt.Errorf("ошибка сериализации данных для обновления статуса: %v", err)
-	}
-
-	_, err = sendAuthorizedRequest("PATCH", url, jsonData)
-	if err != nil {
-		return fmt.Errorf("ошибка обновления статуса задачи: %v", err)
-	}
-
-	return nil
-}
-
-func updateTaskDurationPriceAndThreads(taskID string, duration int, price int, threads int) error {
-	url := fmt.Sprintf("%s/api/collections/face_jobs/records/%s", pocketBaseUrl, taskID)
-
-	data := map[string]int{
+func updateTaskDurationPriceAndThreads(taskID string, duration, price, threads int) error {
+	payload, err := json.Marshal(map[string]int{
 		"duration": duration,
 		"price":    price,
 		"threads":  threads,
-	}
-	jsonData, err := json.Marshal(data)
+	})
 	if err != nil {
-		return fmt.Errorf("ошибка сериализации данных для обновления задачи: %v", err)
+		return fmt.Errorf("ошибка сериализации данных задачи: %v", err)
 	}
-
-	_, err = sendAuthorizedRequest("PATCH", url, jsonData)
+	_, err = sendAuthorizedRequest(
+		http.MethodPatch,
+		fmt.Sprintf("%s/api/collections/face_jobs/records/%s", pocketBaseUrl, taskID),
+		payload,
+	)
 	if err != nil {
 		return fmt.Errorf("ошибка обновления данных задачи: %v", err)
 	}
-
 	return nil
 }

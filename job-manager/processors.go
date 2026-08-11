@@ -19,8 +19,8 @@ func processCircleTask(task *Task) error {
 		return fmt.Errorf("задача с ID %s не содержит ссылки на input_media", task.ID)
 	}
 
-	cacheDir := "cache"
-	err := os.MkdirAll(cacheDir, os.ModePerm)
+	cacheDir := jobCacheDirectory()
+	err := os.MkdirAll(cacheDir, 0o755)
 	if err != nil {
 		return fmt.Errorf("ошибка создания кэша: %v", err)
 	}
@@ -49,7 +49,7 @@ func processCircleTask(task *Task) error {
 
 // Check face swap server health
 func checkFaceSwapHealth() error {
-	resp, err := http.Get(FaceSwapComponent_URL + "/health")
+	resp, err := apiHTTPClient.Get(FaceSwapComponent_URL + "/health")
 	if err != nil {
 		return fmt.Errorf("ошибка проверки состояния сервера замены лиц: %v", err)
 	}
@@ -86,8 +86,8 @@ func processFaceSwapTask(task *Task) (int, int, error) {
 
 // Process video face swap - returns (realDuration, workerCount, error)
 func processVideoSwap(task *Task) (int, int, error) {
-	cacheDir := "cache"
-	err := os.MkdirAll(cacheDir, os.ModePerm)
+	cacheDir := jobCacheDirectory()
+	err := os.MkdirAll(cacheDir, 0o755)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка создания кэша: %v", err)
 	}
@@ -127,8 +127,8 @@ func processVideoSwap(task *Task) (int, int, error) {
 
 // Process photo face swap - returns (processingTime, workerCount, error)
 func processPhotoSwap(task *Task) (int, int, error) {
-	cacheDir := "cache"
-	err := os.MkdirAll(cacheDir, os.ModePerm)
+	cacheDir := jobCacheDirectory()
+	err := os.MkdirAll(cacheDir, 0o755)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка создания кэша: %v", err)
 	}
@@ -180,14 +180,14 @@ type FaceSwapResponse struct {
 
 // Photo swap response structure
 type PhotoSwapResponse struct {
-	ImagePath      string `json:"image_path"`
-	DurationSeconds int   `json:"duration_seconds"`
-	Filename       string `json:"filename"`
-	MediaType      string `json:"media_type"`
-	SessionID      string `json:"session_id"`
-	ProcessingTime int    `json:"processing_time"`
-	WorkersUsed    int    `json:"workers_used"`
-	DeviceType     string `json:"device_type"`
+	ImagePath       string `json:"image_path"`
+	DurationSeconds int    `json:"duration_seconds"`
+	Filename        string `json:"filename"`
+	MediaType       string `json:"media_type"`
+	SessionID       string `json:"session_id"`
+	ProcessingTime  int    `json:"processing_time"`
+	WorkersUsed     int    `json:"workers_used"`
+	DeviceType      string `json:"device_type"`
 }
 
 // Send files to FaceSwapComponent and get result
@@ -239,8 +239,7 @@ func processFaceSwapComponent(sourceImage, targetVideo, outputPath string) (int,
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := mediaHTTPClient.Do(req)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка отправки запроса к FaceSwapComponent: %v", err)
 	}
@@ -348,8 +347,7 @@ func processPhotoSwapComponent(sourceImage, targetImage, outputPath string) (int
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := mediaHTTPClient.Do(req)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка отправки запроса к FaceSwapComponent: %v", err)
 	}

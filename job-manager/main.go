@@ -1,441 +1,277 @@
 package main
 
 import (
-	"bytes"
-	"fmt"
-	"io"
-	"log"
-	"mime/multipart"
-	"net/http"
-	"os"
-	"path/filepath"
-	"strconv"
-	"time"
 	"context"
+	"fmt"
+	"log"
+	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 )
 
-// Version info set at build time
+// Version info set at build time.
 var (
 	GitCommit  = "unknown"
 	GitMessage = "unknown"
 )
 
-// Task - struct for storing task data
+// Task contains the PocketBase fields used by the worker.
 type Task struct {
 	ID          string `json:"id"`
 	Owner       string `json:"owner"`
-	InputMedia  string `json:"input_media"` // видео
-	SourceImage string `json:"input_face"`  // фото для замены лица
+	InputMedia  string `json:"input_media"`
+	SourceImage string `json:"input_face"`
 	OutputMedia string `json:"output_media"`
 	Status      string `json:"status"`
+	Attempts    int    `json:"attempts"`
 }
 
-// Основной цикл обработки задач создания кружков
 func processCircleJobs(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("Процессор задач создания кружков завершает работу...")
-			return
-		default:
-		}
-		
-		task, err := fetchQueuedJobs("circle_jobs")
-		if err != nil {
-			log.Printf("Ошибка при получении задачи: %v", err)
-			continue
-		}
-		if task == nil {
-			wait()
-			continue
-		}
-
-		// Получаем Telegram ID владельца
-		ownerTGID, err := getOwnerTGID(task.Owner)
-		if err != nil {
-			log.Printf("Ошибка получения Telegram ID владельца для задачи %s: %v", task.ID, err)
-			continue
-		}
-
-		// Проверяем монеты
-		tgid, err := strconv.Atoi(ownerTGID)
-		if err != nil {
-			log.Printf("Ошибка преобразования telegram id в int: %v", err)
-			continue
-		}
-
-		userInfo, err := getUserInfo(tgid)
-		if err != nil {
-			log.Printf("Ошибка получения информации о пользователе: %v", err)
-			continue
-		}
-
-		currentCoins, ok := userInfo["coins"].(float64)
-		if !ok {
-			currentCoins = 0
-		}
-
-		if int(currentCoins) < 1 {
-			log.Printf("Недостаточно монет для задачи %s. Требуется: 1, доступно: %d", task.ID, int(currentCoins))
-			updateStatus("circle_jobs", task.ID, fmt.Sprintf("error: недостаточно монет. Требуется: 1, доступно: %d", int(currentCoins)))
-			sendErrorNotification(task.Owner, task.ID)
-			continue
-		}
-
-		// Списываем монеты
-		deductedAmount, err := checkAndDeductCoins(tgid, 1)
-		if err != nil {
-			log.Printf("Ошибка списания монет для задачи %s: %v", task.ID, err)
-			updateStatus("circle_jobs", task.ID, fmt.Sprintf("error: %v", err))
-			sendErrorNotification(task.Owner, task.ID)
-			continue
-		}
-
-		err = updateStatus("circle_jobs", task.ID, "processing")
-		if err != nil {
-			log.Printf("Ошибка смены статуса на 'processing' для задачи %s: %v", task.ID, err)
-			refundCoins(tgid, deductedAmount)
-			continue
-		}
-
-		err = processCircleTask(task)
-		if err != nil {
-			log.Printf("Ошибка обработки задачи %s: %v", task.ID, err)
-			updateStatus("circle_jobs", task.ID, fmt.Sprintf("error: %v", err))
-			sendErrorNotification(task.Owner, task.ID)
-			refundCoins(tgid, deductedAmount)
-			continue
-		}
-
-		err = updateStatus("circle_jobs", task.ID, "sending")
-		if err != nil {
-			log.Printf("Ошибка смены статуса на 'sending' для задачи %s: %v", task.ID, err)
-			refundCoins(tgid, deductedAmount)
-			continue
-		}
-
-		err = notifyCircleOwner(task)
-		if err != nil {
-			log.Printf("Ошибка отправки для задачи %s: %v", task.ID, err)
-			updateStatus("circle_jobs", task.ID, fmt.Sprintf("error: %v", err))
-			sendErrorNotification(task.Owner, task.ID)
-			refundCoins(tgid, deductedAmount)
-			continue
-		}
-
-		err = updateStatus("circle_jobs", task.ID, "completed")
-		if err != nil {
-			log.Printf("Ошибка смены статуса на 'completed' для задачи %s: %v", task.ID, err)
-		}
-
-		// Увеличиваем счетчик кружков
-		err = incrementCircleCount(tgid)
-		if err != nil {
-			log.Printf("Ошибка обновления circle_count для владельца задачи %s: %v", task.ID, err)
-		}
-	}
+	processJobs(ctx, "circle_jobs", handleCircleTask)
 }
 
-// processFaceSwapJobs основной цикл обработки задач замены лиц
 func processFaceSwapJobs(ctx context.Context) {
+	processJobs(ctx, "face_jobs", handleFaceSwapTask)
+}
+
+func processJobs(ctx context.Context, collection string, handler func(context.Context, *Task)) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Процессор задач замены лиц завершает работу...")
+			log.Printf("Процессор %s завершает работу...", collection)
 			return
 		default:
 		}
-		
-		task, err := fetchQueuedJobs("face_jobs")
+
+		task, err := claimJob(collection)
 		if err != nil {
-			log.Printf("Ошибка при получении задачи замены лиц: %v", err)
+			log.Printf("Ошибка при получении задачи из %s: %v", collection, err)
+			if !waitForNextAttempt(ctx, 3*time.Second) {
+				return
+			}
 			continue
 		}
 		if task == nil {
-			wait()
-			continue
-		}
-
-		// Получаем Telegram ID владельца
-		ownerTGID, err := getOwnerTGID(task.Owner)
-		if err != nil {
-			log.Printf("Ошибка получения Telegram ID владельца для задачи %s: %v", task.ID, err)
-			continue
-		}
-
-		// Проверяем монеты
-		tgid, err := strconv.Atoi(ownerTGID)
-		if err != nil {
-			log.Printf("Ошибка преобразования telegram id в int: %v", err)
-			continue
-		}
-
-		userInfo, err := getUserInfo(tgid)
-		if err != nil {
-			log.Printf("Ошибка получения информации о пользователе: %v", err)
-			continue
-		}
-
-		currentCoins, ok := userInfo["coins"].(float64)
-		if !ok {
-			currentCoins = 0
-		}
-
-		// Determine if this is a photo or video task
-		ext := filepath.Ext(task.InputMedia)
-		isPhoto := ext == ".jpg" || ext == ".jpeg" || ext == ".png"
-
-		// Set base cost based on media type
-		requiredCoins := 2
-		if isPhoto {
-			requiredCoins = 1
-		}
-
-		if int(currentCoins) < requiredCoins {
-			log.Printf("Недостаточно монет для задачи %s. Минимум требуется: %d, доступно: %d", task.ID, requiredCoins, int(currentCoins))
-			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: недостаточно монет. Минимум требуется: %d, доступно: %d", requiredCoins, int(currentCoins)))
-			sendErrorNotification(task.Owner, task.ID)
-			continue
-		}
-
-		// Списываем базовую стоимость
-		baseAmount, err := checkAndDeductCoins(tgid, requiredCoins)
-		if err != nil {
-			log.Printf("Ошибка списания базовых монет для задачи %s: %v", task.ID, err)
-			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
-			sendErrorNotification(task.Owner, task.ID)
-			continue
-		}
-
-		err = updateStatus("face_jobs", task.ID, "processing")
-		if err != nil {
-			log.Printf("Ошибка смены статуса на 'processing' для задачи %s: %v", task.ID, err)
-			refundCoins(tgid, baseAmount)
-			continue
-		}
-
-		realDuration, workerCount, err := processFaceSwapTask(task)
-		if err != nil {
-			log.Printf("Ошибка обработки задачи замены лиц %s: %v", task.ID, err)
-			updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
-			sendErrorNotification(task.Owner, task.ID)
-			refundCoins(tgid, baseAmount)
-			continue
-		}
-
-		var totalDeducted int
-
-		if isPhoto {
-			// Photo tasks: flat fee of 1 coin, no additional billing
-			totalDeducted = baseAmount
-			log.Printf("Задача (фото) %s обработана за %d секунд, списано %d монет", task.ID, realDuration, totalDeducted)
-		} else {
-			// Video tasks: 2 coins base + additional billing based on duration
-			// Calculate billable duration (real time × workers for GPU billing)
-			billableDuration := realDuration * workerCount
-			log.Printf("Биллинг: %d сек × %d потоков = %d потоко-секунд", realDuration, workerCount, billableDuration)
-
-			// Calculate additional cost based on billable time (standard rounding)
-			additionalCost := int(float64(billableDuration)/20.0 + 0.5)  // standard rounding
-			totalCost := 2 + additionalCost
-
-			if totalCost > 30 {
-				totalCost = 30  // cap at 30 coins
+			if !waitForNextAttempt(ctx, 5*time.Second) {
+				return
 			}
-
-			// Handle additional coins
-			additionalAmount := 0
-			finalAdditionalCost := additionalCost
-			if additionalCost > 0 {
-				// Try to deduct additional coins
-				additionalAmount, err = checkAndDeductCoins(tgid, additionalCost)
-				if err != nil {
-					// User can't pay additional cost - double it and force negative balance
-					finalAdditionalCost = additionalCost * 2
-					log.Printf("Пользователь не может доплатить %d монет за задачу %s, удваиваем до %d и разрешаем отрицательный баланс", additionalCost, task.ID, finalAdditionalCost)
-
-					err = forceDeductCoins(tgid, finalAdditionalCost)
-					if err != nil {
-						log.Printf("Ошибка принудительного списания монет для задачи %s: %v", task.ID, err)
-						updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
-						sendErrorNotification(task.Owner, task.ID)
-						refundCoins(tgid, baseAmount)
-						continue
-					}
-					additionalAmount = finalAdditionalCost
-				}
-			}
-
-			totalDeducted = baseAmount + additionalAmount
-			log.Printf("Задача (видео) %s обработана за %d секунд (%d потоков), списано %d монет (базовые: %d, за время: %d)", task.ID, realDuration, workerCount, totalDeducted, baseAmount, additionalAmount)
-		}
-
-		// Update duration and price in database
-		err = updateTaskDurationPriceAndThreads(task.ID, realDuration, totalDeducted, workerCount)
-		if err != nil {
-			log.Printf("Предупреждение: Не удалось обновить длительность и цену для задачи %s: %v", task.ID, err)
-		}
-
-		// Устанавливаем статус sending перед отправкой
-		err = updateStatus("face_jobs", task.ID, "sending")
-		if err != nil {
-			log.Printf("Ошибка смены статуса на 'sending' для задачи %s: %v", task.ID, err)
-			refundCoins(tgid, totalDeducted)
 			continue
 		}
 
-		// Отправляем результат пользователю (фото или видео)
-		if isPhoto {
-			outputPath := filepath.Join("cache", fmt.Sprintf("%s_output.jpg", task.ID))
-			err = sendPhotoToUser(task.Owner, outputPath)
-			if err != nil {
-				log.Printf("Ошибка отправки фото пользователю для задачи %s: %v", task.ID, err)
-				updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
-				sendErrorNotification(task.Owner, task.ID)
-				refundCoins(tgid, totalDeducted)
-				continue
-			}
-		} else {
-			outputPath := filepath.Join("cache", fmt.Sprintf("%s_output.mp4", task.ID))
-			err = sendVideoToUser(task.Owner, outputPath)
-			if err != nil {
-				log.Printf("Ошибка отправки видео пользователю для задачи %s: %v", task.ID, err)
-				updateStatus("face_jobs", task.ID, fmt.Sprintf("error: %v", err))
-				sendErrorNotification(task.Owner, task.ID)
-				refundCoins(tgid, totalDeducted)
-				continue
-			}
-		}
-
-		err = updateStatus("face_jobs", task.ID, "completed")
-		if err != nil {
-			log.Printf("Ошибка смены статуса на 'completed' для задачи %s: %v", task.ID, err)
-		}
-
-		// Увеличиваем счетчик замен лиц
-		err = incrementFaceReplaceCount(tgid)
-		if err != nil {
-			log.Printf("Ошибка обновления face_replace_count для владельца задачи %s: %v", task.ID, err)
-		}
-
-		log.Printf("Задача замены лиц %s успешно обработана", task.ID)
+		log.Printf("Задача %s получена воркером %s, попытка %d", task.ID, workerID, task.Attempts)
+		handler(ctx, task)
 	}
 }
 
-// Отправка готового видеосообщения владельцу через Telegram API и обновление баланса
-func notifyCircleOwner(task *Task) error {
-	if task.Owner == "" {
-		return fmt.Errorf("задача с ID %s не содержит корректного owner", task.ID)
+func handleCircleTask(ctx context.Context, task *Task) {
+	if err := changeTaskCoins(task, "circle_charge", "charge", -circlePrice); err != nil {
+		failTask("circle_jobs", task, err)
+		return
 	}
 
-	ownerTGID, err := getOwnerTGID(task.Owner)
+	if err := runWithHeartbeat(ctx, "circle_jobs", task, func() error {
+		return processCircleTask(task)
+	}); err != nil {
+		refundTaskCoins(task, "circle_refund", "refund", circlePrice)
+		failTask("circle_jobs", task, err)
+		return
+	}
+
+	if err := updateClaimedStatus("circle_jobs", task.ID, statusSending); err != nil {
+		refundTaskCoins(task, "circle_refund", "refund", circlePrice)
+		failTask("circle_jobs", task, err)
+		return
+	}
+
+	if err := notifyCircleOwner(task); err != nil {
+		refundTaskCoins(task, "circle_refund", "refund", circlePrice)
+		failTask("circle_jobs", task, err)
+		return
+	}
+
+	if err := updateClaimedStatus("circle_jobs", task.ID, statusCompleted); err != nil {
+		log.Printf("Кружок по задаче %s отправлен, но статус completed не сохранён: %v", task.ID, err)
+		return
+	}
+
+	if _, err := applyUserOperation(userOperation{
+		UserID:       task.Owner,
+		JobID:        task.ID,
+		Kind:         "circle_complete",
+		OperationKey: completionOperationKey(task),
+		CircleDelta:  1,
+	}); err != nil {
+		log.Printf("Кружок по задаче %s отправлен, но circle_count не обновлён: %v", task.ID, err)
+	}
+
+	log.Printf("Задача создания кружка %s успешно обработана", task.ID)
+}
+
+func handleFaceSwapTask(ctx context.Context, task *Task) {
+	isPhoto := isPhotoTask(task)
+	basePrice := videoBasePrice
+	if isPhoto {
+		basePrice = photoFaceSwapPrice
+	}
+
+	if err := changeTaskCoins(task, "face_base_charge", "base_charge", -basePrice); err != nil {
+		failTask("face_jobs", task, err)
+		return
+	}
+
+	var duration int
+	var workers int
+	processErr := runWithHeartbeat(ctx, "face_jobs", task, func() error {
+		var err error
+		duration, workers, err = processFaceSwapTask(task)
+		return err
+	})
+	if processErr != nil {
+		refundTaskCoins(task, "face_base_refund", "base_refund", basePrice)
+		failTask("face_jobs", task, processErr)
+		return
+	}
+
+	totalPrice := calculateFaceSwapPrice(isPhoto, duration, workers)
+	additionalPrice := totalPrice - basePrice
+	if additionalPrice > 0 {
+		if err := changeTaskCoins(task, "face_extra_charge", "extra_charge", -additionalPrice); err != nil {
+			refundTaskCoins(task, "face_base_refund", "base_refund", basePrice)
+			failTask("face_jobs", task, err)
+			return
+		}
+	}
+
+	if err := updateTaskDurationPriceAndThreads(task.ID, duration, totalPrice, workers); err != nil {
+		log.Printf("Не удалось сохранить цену задачи %s: %v", task.ID, err)
+	}
+
+	if err := updateClaimedStatus("face_jobs", task.ID, statusSending); err != nil {
+		refundFaceTask(task, basePrice, additionalPrice)
+		failTask("face_jobs", task, err)
+		return
+	}
+
+	outputExtension := ".mp4"
+	if isPhoto {
+		outputExtension = ".jpg"
+	}
+	outputPath := filepath.Join(jobCacheDirectory(), task.ID+"_output"+outputExtension)
+	var sendErr error
+	if isPhoto {
+		sendErr = sendPhotoToUser(task.Owner, outputPath)
+	} else {
+		sendErr = sendVideoToUser(task.Owner, outputPath)
+	}
+	if sendErr != nil {
+		refundFaceTask(task, basePrice, additionalPrice)
+		failTask("face_jobs", task, sendErr)
+		return
+	}
+
+	if err := updateClaimedStatus("face_jobs", task.ID, statusCompleted); err != nil {
+		log.Printf("Результат задачи %s отправлен, но статус completed не сохранён: %v", task.ID, err)
+		return
+	}
+
+	if _, err := applyUserOperation(userOperation{
+		UserID:       task.Owner,
+		JobID:        task.ID,
+		Kind:         "face_complete",
+		OperationKey: completionOperationKey(task),
+		FaceDelta:    1,
+	}); err != nil {
+		log.Printf("Результат задачи %s отправлен, но face_replace_count не обновлён: %v", task.ID, err)
+	}
+
+	log.Printf(
+		"Задача замены лиц %s успешно обработана за %d секунд (%d потоков), списано %d монет",
+		task.ID,
+		duration,
+		workers,
+		totalPrice,
+	)
+}
+
+func isPhotoTask(task *Task) bool {
+	switch strings.ToLower(filepath.Ext(task.InputMedia)) {
+	case ".jpg", ".jpeg", ".png":
+		return true
+	default:
+		return false
+	}
+}
+
+func changeTaskCoins(task *Task, kind, action string, delta int) error {
+	_, err := applyUserOperation(userOperation{
+		UserID:       task.Owner,
+		JobID:        task.ID,
+		Kind:         kind,
+		OperationKey: operationKey(task, action),
+		CoinsDelta:   delta,
+	})
 	if err != nil {
-		return fmt.Errorf("ошибка получения Telegram ID владельца задачи %s: %v", task.ID, err)
+		return fmt.Errorf("операция с балансом не выполнена: %v", err)
 	}
-
-	outputFilePath := filepath.Join("cache", fmt.Sprintf("%s_output.mp4", task.ID))
-	if _, err := os.Stat(outputFilePath); err != nil {
-		return fmt.Errorf("файл для отправки не найден: %v", err)
-	}
-
-	file, err := os.Open(outputFilePath)
-	if err != nil {
-		return fmt.Errorf("ошибка открытия файла: %v", err)
-	}
-	defer file.Close()
-
-	var fileBuffer bytes.Buffer
-	_, err = io.Copy(&fileBuffer, file)
-	if err != nil {
-		return fmt.Errorf("ошибка чтения содержимого файла: %v", err)
-	}
-
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	err = writer.WriteField("chat_id", ownerTGID)
-	if err != nil {
-		return fmt.Errorf("ошибка добавления поля chat_id: %v", err)
-	}
-
-	filePart, err := writer.CreateFormFile("video_note", filepath.Base(outputFilePath))
-	if err != nil {
-		return fmt.Errorf("ошибка добавления файла в запрос: %v", err)
-	}
-	_, err = fileBuffer.WriteTo(filePart)
-	if err != nil {
-		return fmt.Errorf("ошибка записи видео в multipart форму: %v", err)
-	}
-
-	err = writer.Close()
-	if err != nil {
-		return fmt.Errorf("ошибка закрытия записи multipart данных: %v", err)
-	}
-
-	url := fmt.Sprintf("%s/bot%s/sendVideoNote", BOT_ENDPOINT, BOT_TOKEN)
-
-	req, err := http.NewRequest("POST", url, body)
-	if err != nil {
-		return fmt.Errorf("ошибка создания HTTP-запроса: %v", err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("ошибка отправки запроса Telegram API: %v", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("ошибка чтения ответа Telegram API: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("ошибка в Telegram API. Код %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	log.Printf("Видеосообщение отправлено владельцу задачи %s (Telegram ID: %s).", task.ID, ownerTGID)
-
-	// Увеличиваем счетчик кружков (circle_count) для владельца
-	tgid, err := strconv.Atoi(ownerTGID)
-	if err != nil {
-		return fmt.Errorf("ошибка преобразования telegram id в int: %s", err)
-	}
-	err = incrementCircleCount(tgid)
-	if err != nil {
-		return fmt.Errorf("ошибка обновления circle_count для владельца задачи %s: %v", task.ID, err)
-	}
-
 	return nil
 }
 
-func wait() {
-	<-time.After(10 * time.Second)
+func refundTaskCoins(task *Task, kind, action string, amount int) {
+	if amount <= 0 {
+		return
+	}
+	if err := changeTaskCoins(task, kind, action, amount); err != nil {
+		log.Printf("Не удалось вернуть %d монет по задаче %s: %v", amount, task.ID, err)
+	}
+}
+
+func refundFaceTask(task *Task, basePrice, additionalPrice int) {
+	refundTaskCoins(task, "face_base_refund", "base_refund", basePrice)
+	refundTaskCoins(task, "face_extra_refund", "extra_refund", additionalPrice)
+}
+
+func failTask(collection string, task *Task, cause error) {
+	log.Printf("Задача %s завершилась ошибкой: %v", task.ID, cause)
+	if err := updateClaimedStatus(collection, task.ID, taskErrorStatus(cause)); err != nil {
+		log.Printf("Не удалось сохранить ошибку задачи %s: %v", task.ID, err)
+	}
+	if err := sendErrorNotification(task.Owner, task.ID); err != nil {
+		log.Printf("Не удалось уведомить пользователя об ошибке задачи %s: %v", task.ID, err)
+	}
+}
+
+func waitForNextAttempt(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func cleanupTempFiles() {
-	cacheDir := "cache"
+	cacheDir := jobCacheDirectory()
 	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
 		return
 	}
-	
+
 	files, err := filepath.Glob(filepath.Join(cacheDir, "*"))
 	if err != nil {
 		log.Printf("Ошибка поиска файлов кэша: %v", err)
 		return
 	}
-	
+
 	for _, file := range files {
-		if info, err := os.Stat(file); err == nil {
-			if time.Since(info.ModTime()) > time.Hour {
-				if err := os.Remove(file); err != nil {
-					log.Printf("Не удалось удалить старый файл кэша %s: %v", file, err)
-				} else {
-					log.Printf("Удален старый файл кэша: %s", file)
-				}
+		if info, err := os.Stat(file); err == nil && time.Since(info.ModTime()) > time.Hour {
+			if err := os.Remove(file); err != nil {
+				log.Printf("Не удалось удалить старый файл кэша %s: %v", file, err)
+			} else {
+				log.Printf("Удалён старый файл кэша: %s", file)
 			}
 		}
 	}
@@ -443,54 +279,48 @@ func cleanupTempFiles() {
 
 func initializeServices() error {
 	for retries := 0; retries < 5; retries++ {
-		err := authenticatePocketBase()
-		if err == nil {
+		if err := authenticatePocketBase(); err == nil {
 			log.Println("Авторизация PocketBase успешна")
 			return nil
+		} else {
+			log.Printf("Ошибка авторизации PocketBase (попытка %d/5): %v", retries+1, err)
 		}
-		log.Printf("Ошибка авторизации PocketBase (попытка %d/5): %v", retries+1, err)
 		time.Sleep(time.Duration(retries+1) * 5 * time.Second)
 	}
 	return fmt.Errorf("не удалось авторизоваться после 5 попыток")
 }
 
 func main() {
-	// Log version information
 	commitShort := GitCommit
 	if len(GitCommit) > 8 {
 		commitShort = GitCommit[:8]
 	}
-	log.Printf("🚀 Job Manager started")
-	log.Printf("📦 Version: %s - %s", commitShort, GitMessage)
-	
+	log.Println("🚀 Job Manager запущен")
+	log.Printf("📦 Версия: %s — %s", commitShort, GitMessage)
+
 	BOT_TOKEN, _, BOT_ENDPOINT, FaceSwapComponent_URL = LoadEnvironment()
+	workerID = initializeWorkerID()
+	log.Printf("Воркер: %s", workerID)
 
-	// Cleanup old temp files on startup
 	cleanupTempFiles()
-
-	// Initialize services with retry
 	if err := initializeServices(); err != nil {
 		log.Fatalf("Ошибка инициализации сервисов: %v", err)
 	}
 
-	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle graceful shutdown
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	go func() {
-		<-c
+		<-signals
 		log.Println("Получен сигнал остановки, корректно завершаем работу...")
 		cancel()
 	}()
 
-	// Start processors with context
 	go processCircleJobs(ctx)
 	go processFaceSwapJobs(ctx)
 
-	// Wait for shutdown signal
 	<-ctx.Done()
 	log.Println("Менеджер задач завершил работу")
 }
