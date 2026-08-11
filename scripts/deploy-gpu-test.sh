@@ -90,11 +90,11 @@ set +a
 
 compose_files=(-f compose.yaml -f compose.test.yaml)
 echo "Запускаю PocketBase..."
-"${compose[@]}" "${compose_files[@]}" up -d --build pocketbase
+"${compose[@]}" "${compose_files[@]}" up -d --build pocketbase </dev/null
 
 for attempt in {1..60}; do
   if "${compose[@]}" "${compose_files[@]}" exec -T pocketbase \
-    curl --fail --silent http://127.0.0.1:8080/api/health >/dev/null; then
+    curl --fail --silent http://127.0.0.1:8080/api/health </dev/null >/dev/null; then
     break
   fi
   if [[ $attempt -eq 60 ]]; then
@@ -106,16 +106,16 @@ done
 
 echo "Проверяю администратора PocketBase..."
 if ! "${compose[@]}" "${compose_files[@]}" exec -T pocketbase sh -ceu \
-  'exec /pb/pocketbase admin update "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data'; then
+  'exec /pb/pocketbase admin update "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data' </dev/null; then
   "${compose[@]}" "${compose_files[@]}" exec -T pocketbase sh -ceu \
-    'exec /pb/pocketbase admin create "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data'
+    'exec /pb/pocketbase admin create "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data' </dev/null
 fi
 
 # The Telegram bot is intentionally absent. See the telegram-e2e profile in
 # compose.test.yaml before starting it against any real token.
 echo "Собираю и запускаю core-сервисы без Telegram poller..."
 "${compose[@]}" "${compose_files[@]}" up -d --build \
-  telegram-bot-api face-swap-component job-manager
+  telegram-bot-api face-swap-component job-manager </dev/null
 
 for attempt in {1..180}; do
   if curl --fail --silent http://127.0.0.1:17860/health >/dev/null; then
@@ -123,7 +123,7 @@ for attempt in {1..180}; do
   fi
   if [[ $attempt -eq 180 ]]; then
     echo "Face Swap Component не загрузил модель и CUDA runtime" >&2
-    "${compose[@]}" "${compose_files[@]}" logs --tail=200 face-swap-component
+    "${compose[@]}" "${compose_files[@]}" logs --tail=200 face-swap-component </dev/null
     exit 1
   fi
   sleep 5
@@ -132,5 +132,5 @@ done
 curl --fail --silent http://127.0.0.1:18080/api/health >/dev/null
 curl --fail --silent http://127.0.0.1:17860/health
 printf '\n'
-"${compose[@]}" "${compose_files[@]}" ps
+"${compose[@]}" "${compose_files[@]}" ps </dev/null
 REMOTE
