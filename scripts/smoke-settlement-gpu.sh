@@ -47,8 +47,8 @@ face_job=
 token=
 
 cleanup() {
-	status=$?
-	set +e
+  status=$?
+  set +e
   if [[ -n "$token" && -n "$user_id" ]]; then
     operations=$(curl --silent \
       -H "Authorization: Bearer $token" \
@@ -72,7 +72,7 @@ cleanup() {
       "$api/api/collections/users/records/$user_id"
   fi
   "${compose[@]}" "${compose_files[@]}" up -d job-manager </dev/null >/dev/null
-	return "$status"
+  return "$status"
 }
 trap cleanup EXIT
 
@@ -102,16 +102,27 @@ circle_response=$(curl --fail --silent "${auth[@]}" \
 circle_job=$(printf '%s' "$circle_response" | jq -er '.id')
 echo "Settlement smoke: circle job создан"
 
-claim=$(jq -nc --arg collection circle_jobs --arg worker settlement-smoke \
-  '{collection:$collection,worker_id:$worker}')
-curl --fail --silent "${auth[@]}" "${json[@]}" -d "$claim" \
-  "$api/api/faceswaper/jobs/claim" | jq -e --arg id "$circle_job" '.task.id == $id' >/dev/null
+claim=$(jq -nc \
+  '{status:"processing",claimed_by:"settlement-smoke",lease_until:"2099-01-01 00:00:00.000Z",attempts:1}')
+claim_response=$(curl --fail --silent "${auth[@]}" "${json[@]}" -X PATCH -d "$claim" \
+  "$api/api/collections/circle_jobs/records/$circle_job")
+if ! printf '%s' "$claim_response" \
+  | jq -e '.status == "processing" and .claimed_by == "settlement-smoke"' >/dev/null; then
+  printf 'Не удалось подготовить circle fixture: %s\n' "$claim_response" >&2
+  exit 1
+fi
+echo "Settlement smoke: circle fixture захвачен"
 
 start_circle=$(jq -nc --arg id "$circle_job" \
   '{collection:"circle_jobs",task_id:$id,worker_id:"settlement-smoke",action:"start_sending",price:1}')
 for _ in 1 2; do
-  curl --fail --silent "${auth[@]}" "${json[@]}" -d "$start_circle" \
-    "$api/api/faceswaper/jobs/settle" | jq -e '.ok and .price == 1 and .balance == 199' >/dev/null
+  settlement_response=$(curl --silent --show-error "${auth[@]}" "${json[@]}" -d "$start_circle" \
+    "$api/api/faceswaper/jobs/settle")
+  if ! printf '%s' "$settlement_response" \
+    | jq -e '.ok and .price == 1 and .balance == 199' >/dev/null; then
+    printf 'Некорректный ответ start_sending circle: %s\n' "$settlement_response" >&2
+    exit 1
+  fi
 done
 echo "Settlement smoke: повторное списание circle идемпотентно"
 
@@ -136,10 +147,13 @@ face_response=$(curl --fail --silent "${auth[@]}" \
 face_job=$(printf '%s' "$face_response" | jq -er '.id')
 echo "Settlement smoke: face job создан"
 
-claim=$(jq -nc --arg collection face_jobs --arg worker settlement-smoke \
-  '{collection:$collection,worker_id:$worker}')
-curl --fail --silent "${auth[@]}" "${json[@]}" -d "$claim" \
-  "$api/api/faceswaper/jobs/claim" | jq -e --arg id "$face_job" '.task.id == $id' >/dev/null
+claim_response=$(curl --fail --silent "${auth[@]}" "${json[@]}" -X PATCH -d "$claim" \
+  "$api/api/collections/face_jobs/records/$face_job")
+if ! printf '%s' "$claim_response" \
+  | jq -e '.status == "processing" and .claimed_by == "settlement-smoke"' >/dev/null; then
+  printf 'Не удалось подготовить face fixture: %s\n' "$claim_response" >&2
+  exit 1
+fi
 
 start_face=$(jq -nc --arg id "$face_job" \
   '{collection:"face_jobs",task_id:$id,worker_id:"settlement-smoke",action:"start_sending",price:3,duration:12,threads:1}')
