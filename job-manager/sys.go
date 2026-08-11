@@ -30,7 +30,10 @@ var (
 	BOT_ENDPOINT string
 )
 
-var FaceSwapComponent_URL string
+var (
+	FaceSwapComponent_URL string
+	FaceSwapAPIKey        string
+)
 
 var (
 	apiHTTPClient = &http.Client{
@@ -155,6 +158,10 @@ func LoadEnvironment() (string, bool, string, string) {
 	faceSwapURL := strings.TrimRight(strings.TrimSpace(os.Getenv("FaceSwapComponent_URL")), "/")
 	if faceSwapURL == "" {
 		log.Fatal("FaceSwapComponent_URL не задан")
+	}
+	FaceSwapAPIKey = strings.TrimSpace(os.Getenv("FACE_SWAP_API_KEY"))
+	if FaceSwapAPIKey == "" {
+		log.Fatal("FACE_SWAP_API_KEY не задан")
 	}
 
 	return botToken, botDebug, botEndpoint, faceSwapURL

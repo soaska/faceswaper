@@ -26,8 +26,10 @@ COPY . .
 # Create necessary directories
 RUN mkdir -p /temp/models /temp/media /temp/cache
 
-# Download model
-RUN wget https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx -O /temp/models/inswapper_128.onnx
+# Download the official model release and verify it before adding it to the image.
+RUN wget -q https://github.com/deepinsight/insightface/releases/download/v0.7/inswapper_128.onnx \
+        -O /temp/models/inswapper_128.onnx \
+    && echo "e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af  /temp/models/inswapper_128.onnx" | sha256sum -c -
 
 # Build arguments for version info
 ARG GIT_COMMIT=unknown
@@ -38,8 +40,9 @@ ENV PYTHONUNBUFFERED=1 \
     OMP_NUM_THREADS=4 \
     MKL_NUM_THREADS=4 \
     DEVICE_TYPE=cpu \
+    MAX_CONCURRENT_JOBS=1 \
     GIT_COMMIT=${GIT_COMMIT} \
     GIT_MESSAGE=${GIT_MESSAGE}
 
 # Run application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"] 
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1", "--no-proxy-headers"]
