@@ -104,6 +104,59 @@ func TestSendAuthorizedRequestRejectsServerError(t *testing.T) {
 	}
 }
 
+func TestPendingFacePersistenceIncludesRequestIdentity(t *testing.T) {
+	var payloads []map[string]string
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(request.URL.Path, "/auth-with-password") {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"token":"test-token"}`)),
+				Header:     make(http.Header),
+			}, nil
+		}
+		if request.Method != http.MethodPatch || request.URL.Path != "/api/collections/users/records/user1" {
+			t.Fatalf("unexpected request: %s %s", request.Method, request.URL.Path)
+		}
+		var payload map[string]string
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode pending face payload: %v", err)
+		}
+		payloads = append(payloads, payload)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{}`)),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	oldClient := apiHTTPClient
+	oldURL := pocketBaseUrl
+	oldPocketBaseClient := pocketBaseClient
+	apiHTTPClient = &http.Client{Transport: transport}
+	configurePocketBase("http://pocketbase.test", "admin", "secret", apiHTTPClient)
+	defer func() {
+		apiHTTPClient = oldClient
+		pocketBaseUrl = oldURL
+		pocketBaseClient = oldPocketBaseClient
+	}()
+
+	if err := savePendingFace("user1", "face-file", "telegram:42"); err != nil {
+		t.Fatalf("savePendingFace() error = %v", err)
+	}
+	if err := clearPendingFace("user1"); err != nil {
+		t.Fatalf("clearPendingFace() error = %v", err)
+	}
+	if len(payloads) != 2 {
+		t.Fatalf("pending face writes = %d, want 2", len(payloads))
+	}
+	if payloads[0]["pending_face_file_id"] != "face-file" || payloads[0]["pending_face_request_key"] != "telegram:42" || payloads[0]["pending_face_updated"] == "" {
+		t.Fatalf("save payload = %#v", payloads[0])
+	}
+	if payloads[1]["pending_face_file_id"] != "" || payloads[1]["pending_face_request_key"] != "" || payloads[1]["pending_face_updated"] != "" {
+		t.Fatalf("clear payload = %#v", payloads[1])
+	}
+}
+
 func TestUploadJobWritesFieldsAndFiles(t *testing.T) {
 	tempFile, err := os.CreateTemp(t.TempDir(), "photo-*.jpg")
 	if err != nil {

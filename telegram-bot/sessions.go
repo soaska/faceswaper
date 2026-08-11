@@ -9,6 +9,7 @@ const sessionTTL = 30 * time.Minute
 
 type UserSession struct {
 	FaceFileID         string
+	FaceRequestKey     string
 	WaitingForCompress bool
 	CompressQuality    int
 	UpdatedAt          time.Time
@@ -33,18 +34,21 @@ func (store *sessionStore) Get(userID int64) UserSession {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	now := store.now()
-	session := store.sessions[userID]
-	if !session.UpdatedAt.IsZero() && now.Sub(session.UpdatedAt) >= store.ttl {
-		session = UserSession{}
+	session, exists := store.sessions[userID]
+	if !exists {
+		return UserSession{}
 	}
-	session.UpdatedAt = now
-	store.sessions[userID] = session
+	if !session.UpdatedAt.IsZero() && now.Sub(session.UpdatedAt) >= store.ttl {
+		delete(store.sessions, userID)
+		return UserSession{}
+	}
 	return session
 }
 
-func (store *sessionStore) SetFace(userID int64, fileID string) {
+func (store *sessionStore) SetFace(userID int64, fileID, requestKey string) {
 	store.update(userID, func(session *UserSession) {
 		session.FaceFileID = fileID
+		session.FaceRequestKey = requestKey
 	})
 }
 

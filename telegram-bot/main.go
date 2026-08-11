@@ -306,8 +306,8 @@ func handleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 		pendingFace, err := getPendingFace(pbUserID)
 		if err != nil {
 			log.Printf("Не удалось восстановить сессию пользователя %d: %v", userID, err)
-		} else if pendingFace != "" {
-			userSessions.SetFace(userID, pendingFace)
+		} else if pendingFace.FileID != "" {
+			userSessions.SetFace(userID, pendingFace.FileID, pendingFace.RequestKey)
 			session = userSessions.Get(userID)
 		}
 	}
@@ -417,12 +417,16 @@ func handlePhoto(bot *tgbotapi.BotAPI, message *tgbotapi.Message, pbUserID strin
 	}
 
 	if session.FaceFileID == "" {
-		if err := savePendingFace(pbUserID, fileID); err != nil {
+		if err := savePendingFace(pbUserID, fileID, requestKey); err != nil {
 			log.Printf("Не удалось сохранить фотографию лица: %v", err)
 			sendText(bot, message.Chat.ID, "Не удалось сохранить фотографию. Попробуйте ещё раз.")
 			return
 		}
-		userSessions.SetFace(message.From.ID, fileID)
+		userSessions.SetFace(message.From.ID, fileID, requestKey)
+		sendTextWithCancelKeyboard(bot, message.Chat.ID, "Получена фотография. Пожалуйста, отправьте видео или второе фото для замены лица.")
+		return
+	}
+	if isRepeatedFaceSource(session, requestKey) {
 		sendTextWithCancelKeyboard(bot, message.Chat.ID, "Получена фотография. Пожалуйста, отправьте видео или второе фото для замены лица.")
 		return
 	}
@@ -439,6 +443,10 @@ func handlePhoto(bot *tgbotapi.BotAPI, message *tgbotapi.Message, pbUserID strin
 		log.Printf("Не удалось очистить сессию после создания задачи %s: %v", jobID, err)
 	}
 	sendText(bot, message.Chat.ID, fmt.Sprintf("Ваше фото поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
+}
+
+func isRepeatedFaceSource(session UserSession, requestKey string) bool {
+	return requestKey != "" && session.FaceRequestKey == requestKey
 }
 
 func handleVideo(bot *tgbotapi.BotAPI, message *tgbotapi.Message, pbUserID string, session UserSession, requestKey string) {

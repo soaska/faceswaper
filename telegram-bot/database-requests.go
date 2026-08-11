@@ -26,6 +26,7 @@ type UserRecord struct {
 	FaceReplaceCount int    `json:"face_replace_count"`
 	PendingFaceFile  string `json:"pending_face_file_id"`
 	PendingFaceDate  string `json:"pending_face_updated"`
+	PendingFaceKey   string `json:"pending_face_request_key"`
 }
 
 type JobRecord struct {
@@ -125,36 +126,42 @@ func updateUsername(userID, username string) error {
 	return err
 }
 
-func getPendingFace(userID string) (string, error) {
+type pendingFace struct {
+	FileID     string
+	RequestKey string
+}
+
+func getPendingFace(userID string) (pendingFace, error) {
 	body, err := sendAuthorizedRequest(
 		http.MethodGet,
 		fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID),
 		nil,
 	)
 	if err != nil {
-		return "", err
+		return pendingFace{}, err
 	}
 	var user UserRecord
 	if err := json.Unmarshal(body, &user); err != nil {
-		return "", fmt.Errorf("ошибка разбора сессии пользователя: %v", err)
+		return pendingFace{}, fmt.Errorf("ошибка разбора сессии пользователя: %v", err)
 	}
 	if user.PendingFaceFile == "" || user.PendingFaceDate == "" {
-		return "", nil
+		return pendingFace{}, nil
 	}
 	updated, err := parsePocketBaseTime(user.PendingFaceDate)
 	if err != nil || time.Since(updated) >= sessionTTL {
 		if clearErr := clearPendingFace(userID); clearErr != nil {
 			log.Printf("Не удалось очистить просроченную сессию пользователя %s: %v", userID, clearErr)
 		}
-		return "", nil
+		return pendingFace{}, nil
 	}
-	return user.PendingFaceFile, nil
+	return pendingFace{FileID: user.PendingFaceFile, RequestKey: user.PendingFaceKey}, nil
 }
 
-func savePendingFace(userID, fileID string) error {
+func savePendingFace(userID, fileID, requestKey string) error {
 	payload, err := json.Marshal(map[string]string{
-		"pending_face_file_id": fileID,
-		"pending_face_updated": time.Now().UTC().Format("2006-01-02 15:04:05.000Z"),
+		"pending_face_file_id":     fileID,
+		"pending_face_updated":     time.Now().UTC().Format("2006-01-02 15:04:05.000Z"),
+		"pending_face_request_key": requestKey,
 	})
 	if err != nil {
 		return err
@@ -169,8 +176,9 @@ func savePendingFace(userID, fileID string) error {
 
 func clearPendingFace(userID string) error {
 	payload, err := json.Marshal(map[string]string{
-		"pending_face_file_id": "",
-		"pending_face_updated": "",
+		"pending_face_file_id":     "",
+		"pending_face_updated":     "",
+		"pending_face_request_key": "",
 	})
 	if err != nil {
 		return err
