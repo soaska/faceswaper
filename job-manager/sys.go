@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -175,8 +176,12 @@ func configuredFaceSwapURL() string {
 	return faceSwapURL
 }
 
-func downloadFile(url, destination string) error {
-	resp, err := mediaHTTPClient.Get(url)
+func downloadFile(ctx context.Context, url, destination string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("ошибка создания запроса скачивания: %v", err)
+	}
+	resp, err := mediaHTTPClient.Do(request)
 	if err != nil {
 		return fmt.Errorf("ошибка скачивания: %v", err)
 	}
@@ -213,17 +218,18 @@ func sendTelegramMessage(chatID, message string) error {
 	return sendTelegramRequest("sendMessage", writer.FormDataContentType(), body)
 }
 
-func sendTelegramVideo(chatID, filePath string) error {
-	return sendTelegramFile("sendVideo", "video", chatID, filePath)
+func sendTelegramVideo(ctx context.Context, chatID, filePath string) error {
+	return sendTelegramFile(ctx, "sendVideo", "video", chatID, filePath)
 }
 
-func sendTelegramPhoto(chatID, filePath string) error {
-	return sendTelegramFile("sendPhoto", "photo", chatID, filePath)
+func sendTelegramPhoto(ctx context.Context, chatID, filePath string) error {
+	return sendTelegramFile(ctx, "sendPhoto", "photo", chatID, filePath)
 }
 
-func sendTelegramFile(method, field, chatID, filePath string) error {
+func sendTelegramFile(ctx context.Context, method, field, chatID, filePath string) error {
 	url := fmt.Sprintf("%s/bot%s/%s", BOT_ENDPOINT, BOT_TOKEN, method)
 	resp, err := doStreamingMultipartFileRequest(
+		ctx,
 		mediaHTTPClient,
 		http.MethodPost,
 		url,
@@ -254,7 +260,7 @@ func sendTelegramRequest(method, contentType string, body *bytes.Buffer) error {
 	}
 	req.Header.Set("Content-Type", contentType)
 
-	resp, err := mediaHTTPClient.Do(req)
+	resp, err := apiHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("ошибка запроса Telegram: %v", err)
 	}
@@ -278,18 +284,18 @@ func sendErrorNotification(ownerID, taskID string) error {
 	return sendTelegramMessage(ownerTGID, message)
 }
 
-func sendVideoToUser(ownerID, filePath string) error {
+func sendVideoToUser(ctx context.Context, ownerID, filePath string) error {
 	ownerTGID, err := getOwnerTGID(ownerID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения Telegram ID владельца: %v", err)
 	}
-	return sendTelegramVideo(ownerTGID, filePath)
+	return sendTelegramVideo(ctx, ownerTGID, filePath)
 }
 
-func sendPhotoToUser(ownerID, filePath string) error {
+func sendPhotoToUser(ctx context.Context, ownerID, filePath string) error {
 	ownerTGID, err := getOwnerTGID(ownerID)
 	if err != nil {
 		return fmt.Errorf("ошибка получения Telegram ID владельца: %v", err)
 	}
-	return sendTelegramPhoto(ownerTGID, filePath)
+	return sendTelegramPhoto(ctx, ownerTGID, filePath)
 }

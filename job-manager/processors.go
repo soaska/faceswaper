@@ -31,7 +31,7 @@ func processCircleTask(ctx context.Context, task *Task) error {
 	outputFilePath := filepath.Join(cacheDir, fmt.Sprintf("%s_output.mp4", task.ID))
 	mediaUrl := fmt.Sprintf("%s/api/files/circle_jobs/%s/%s", pocketBaseUrl, task.ID, task.InputMedia)
 
-	err = downloadFile(mediaUrl, inputFilePath)
+	err = downloadFile(ctx, mediaUrl, inputFilePath)
 	if err != nil {
 		return fmt.Errorf("ошибка скачивания файла: %v", err)
 	}
@@ -41,7 +41,7 @@ func processCircleTask(ctx context.Context, task *Task) error {
 		return fmt.Errorf("ошибка обработки видео: %v", err)
 	}
 
-	err = uploadOutputMedia("circle_jobs", task.ID, outputFilePath)
+	err = uploadOutputMedia(ctx, "circle_jobs", task.ID, outputFilePath)
 	if err != nil {
 		return fmt.Errorf("ошибка загрузки кружка в бд: %v", err)
 	}
@@ -106,12 +106,12 @@ func processVideoSwap(ctx context.Context, task *Task) (int, int, error) {
 	videoUrl := fmt.Sprintf("%s/api/files/face_jobs/%s/%s", pocketBaseUrl, task.ID, task.InputMedia)
 	imageUrl := fmt.Sprintf("%s/api/files/face_jobs/%s/%s", pocketBaseUrl, task.ID, task.SourceImage)
 
-	err = downloadFile(videoUrl, videoPath)
+	err = downloadFile(ctx, videoUrl, videoPath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка скачивания видео: %v", err)
 	}
 
-	err = downloadFile(imageUrl, imagePath)
+	err = downloadFile(ctx, imageUrl, imagePath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка скачивания изображения: %v", err)
 	}
@@ -123,7 +123,7 @@ func processVideoSwap(ctx context.Context, task *Task) (int, int, error) {
 	}
 
 	// Upload result back
-	err = uploadOutputMedia("face_jobs", task.ID, outputPath)
+	err = uploadOutputMedia(ctx, "face_jobs", task.ID, outputPath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка загрузки результата в бд: %v", err)
 	}
@@ -147,12 +147,12 @@ func processPhotoSwap(ctx context.Context, task *Task) (int, int, error) {
 	sourceImageUrl := fmt.Sprintf("%s/api/files/face_jobs/%s/%s", pocketBaseUrl, task.ID, task.SourceImage)
 	targetImageUrl := fmt.Sprintf("%s/api/files/face_jobs/%s/%s", pocketBaseUrl, task.ID, task.InputMedia)
 
-	err = downloadFile(sourceImageUrl, sourceImagePath)
+	err = downloadFile(ctx, sourceImageUrl, sourceImagePath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка скачивания исходного изображения: %v", err)
 	}
 
-	err = downloadFile(targetImageUrl, targetImagePath)
+	err = downloadFile(ctx, targetImageUrl, targetImagePath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка скачивания целевого изображения: %v", err)
 	}
@@ -164,7 +164,7 @@ func processPhotoSwap(ctx context.Context, task *Task) (int, int, error) {
 	}
 
 	// Upload result back
-	err = uploadOutputMedia("face_jobs", task.ID, outputPath)
+	err = uploadOutputMedia(ctx, "face_jobs", task.ID, outputPath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("ошибка загрузки результата в бд: %v", err)
 	}

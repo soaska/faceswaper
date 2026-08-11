@@ -65,39 +65,70 @@ func processJobs(ctx context.Context, collection string, handler func(context.Co
 
 func handleCircleTask(ctx context.Context, task *Task) {
 	defer cleanupTaskFiles(task.ID)
+	if err := runWithHeartbeat(ctx, "circle_jobs", task, func(taskCtx context.Context) error {
+		return handleCircleTaskWithLease(taskCtx, task)
+	}); err != nil {
+		log.Printf("Обработка задачи %s прервана для безопасного повтора: %v", task.ID, err)
+	}
+}
+
+func handleCircleTaskWithLease(ctx context.Context, task *Task) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := ensureTaskBalance(task, circlePrice); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		failTask("circle_jobs", task, err)
-		return
+		return nil
 	}
 
-	if err := runWithHeartbeat(ctx, "circle_jobs", task, func() error {
-		return processCircleTask(ctx, task)
-	}); err != nil {
+	if err := processCircleTask(ctx, task); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		failTask("circle_jobs", task, err)
-		return
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if err := chargeTaskCoins(task, "circle", "circle_charge", circlePrice); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		failTask("circle_jobs", task, err)
-		return
+		return nil
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := updateClaimedStatus("circle_jobs", task.ID, statusSending); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		refundTaskCoins(task, "circle", "circle_refund", circlePrice)
 		failTask("circle_jobs", task, err)
-		return
+		return nil
 	}
 
-	if err := notifyCircleOwner(task); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := notifyCircleOwner(ctx, task); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		refundTaskCoins(task, "circle", "circle_refund", circlePrice)
 		failTask("circle_jobs", task, err)
-		return
+		return nil
 	}
 
-	if err := updateClaimedStatus("circle_jobs", task.ID, statusCompleted); err != nil {
-		log.Printf("Кружок по задаче %s отправлен, но статус completed не сохранён: %v", task.ID, err)
-		return
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-
 	if _, err := applyUserOperation(userOperation{
 		UserID:       task.Owner,
 		JobID:        task.ID,
@@ -108,11 +139,34 @@ func handleCircleTask(ctx context.Context, task *Task) {
 		log.Printf("Кружок по задаче %s отправлен, но circle_count не обновлён: %v", task.ID, err)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := updateClaimedStatus("circle_jobs", task.ID, statusCompleted); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		log.Printf("Кружок по задаче %s отправлен, но статус completed не сохранён: %v", task.ID, err)
+		return nil
+	}
+
 	log.Printf("Задача создания кружка %s успешно обработана", task.ID)
+	return nil
 }
 
 func handleFaceSwapTask(ctx context.Context, task *Task) {
 	defer cleanupTaskFiles(task.ID)
+	if err := runWithHeartbeat(ctx, "face_jobs", task, func(taskCtx context.Context) error {
+		return handleFaceSwapTaskWithLease(taskCtx, task)
+	}); err != nil {
+		log.Printf("Обработка задачи %s прервана для безопасного повтора: %v", task.ID, err)
+	}
+}
+
+func handleFaceSwapTaskWithLease(ctx context.Context, task *Task) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	isPhoto := isPhotoTask(task)
 	basePrice := videoBasePrice
 	if isPhoto {
@@ -120,35 +174,52 @@ func handleFaceSwapTask(ctx context.Context, task *Task) {
 	}
 
 	if err := ensureTaskBalance(task, basePrice); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		failTask("face_jobs", task, err)
-		return
+		return nil
 	}
 
 	var duration int
 	var workers int
-	processErr := runWithHeartbeat(ctx, "face_jobs", task, func() error {
-		var err error
-		duration, workers, err = processFaceSwapTask(ctx, task)
-		return err
-	})
+	duration, workers, processErr := processFaceSwapTask(ctx, task)
 	if processErr != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		failTask("face_jobs", task, processErr)
-		return
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	totalPrice := calculateFaceSwapPrice(isPhoto, duration, workers)
 	if err := updateTaskDurationPriceAndThreads(task.ID, duration, totalPrice, workers); err != nil {
 		log.Printf("Не удалось сохранить цену задачи %s: %v", task.ID, err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := chargeTaskCoins(task, "face", "face_charge", totalPrice); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		failTask("face_jobs", task, err)
-		return
+		return nil
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := updateClaimedStatus("face_jobs", task.ID, statusSending); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		refundTaskCoins(task, "face", "face_refund", totalPrice)
 		failTask("face_jobs", task, err)
-		return
+		return nil
 	}
 
 	outputExtension := ".mp4"
@@ -156,23 +227,27 @@ func handleFaceSwapTask(ctx context.Context, task *Task) {
 		outputExtension = ".jpg"
 	}
 	outputPath := filepath.Join(jobCacheDirectory(), task.ID+"_output"+outputExtension)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var sendErr error
 	if isPhoto {
-		sendErr = sendPhotoToUser(task.Owner, outputPath)
+		sendErr = sendPhotoToUser(ctx, task.Owner, outputPath)
 	} else {
-		sendErr = sendVideoToUser(task.Owner, outputPath)
+		sendErr = sendVideoToUser(ctx, task.Owner, outputPath)
 	}
 	if sendErr != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		refundTaskCoins(task, "face", "face_refund", totalPrice)
 		failTask("face_jobs", task, sendErr)
-		return
+		return nil
 	}
 
-	if err := updateClaimedStatus("face_jobs", task.ID, statusCompleted); err != nil {
-		log.Printf("Результат задачи %s отправлен, но статус completed не сохранён: %v", task.ID, err)
-		return
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-
 	if _, err := applyUserOperation(userOperation{
 		UserID:       task.Owner,
 		JobID:        task.ID,
@@ -183,6 +258,17 @@ func handleFaceSwapTask(ctx context.Context, task *Task) {
 		log.Printf("Результат задачи %s отправлен, но face_replace_count не обновлён: %v", task.ID, err)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := updateClaimedStatus("face_jobs", task.ID, statusCompleted); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		log.Printf("Результат задачи %s отправлен, но статус completed не сохранён: %v", task.ID, err)
+		return nil
+	}
+
 	log.Printf(
 		"Задача замены лиц %s успешно обработана за %d секунд (%d потоков), списано %d монет",
 		task.ID,
@@ -190,6 +276,7 @@ func handleFaceSwapTask(ctx context.Context, task *Task) {
 		workers,
 		totalPrice,
 	)
+	return nil
 }
 
 func isPhotoTask(task *Task) bool {

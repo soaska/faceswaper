@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -13,6 +14,7 @@ import (
 // A new request must be created for every retry because the pipe is not
 // rewindable.
 func doStreamingMultipartFileRequest(
+	ctx context.Context,
 	client *http.Client,
 	method string,
 	requestURL string,
@@ -35,7 +37,7 @@ func doStreamingMultipartFileRequest(
 		writeResult <- err
 	}()
 
-	request, err := http.NewRequest(method, requestURL, reader)
+	request, err := http.NewRequestWithContext(ctx, method, requestURL, reader)
 	if err != nil {
 		_ = reader.CloseWithError(err)
 		<-writeResult

@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const heartbeatInterval = 5 * time.Minute
+const heartbeatFailureLimit = 3
+
+var heartbeatInterval = time.Minute
+var heartbeatJobFunc = heartbeatJob
 
 var workerID string
 
@@ -148,29 +151,59 @@ func completionOperationKey(task *Task, scope string) string {
 	return scope + ":" + task.ID + ":complete"
 }
 
-func runWithHeartbeat(ctx context.Context, collection string, task *Task, process func() error) error {
-	heartbeatCtx, cancel := context.WithCancel(ctx)
+type leaseUncertainError struct {
+	cause error
+}
+
+func (err *leaseUncertainError) Error() string {
+	return fmt.Sprintf("lease задачи не подтверждён: %v", err.cause)
+}
+
+func runWithHeartbeat(
+	ctx context.Context,
+	collection string,
+	task *Task,
+	process func(context.Context) error,
+) error {
+	processCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	leaseErrors := make(chan error, 1)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		ticker := time.NewTicker(heartbeatInterval)
 		defer ticker.Stop()
+		failures := 0
 		for {
 			select {
-			case <-heartbeatCtx.Done():
+			case <-processCtx.Done():
 				return
 			case <-ticker.C:
-				if err := heartbeatJob(collection, task.ID); err != nil {
+				if err := heartbeatJobFunc(collection, task.ID); err != nil {
+					failures++
 					log.Printf("Не удалось продлить обработку задачи %s: %v", task.ID, err)
+					if failures >= heartbeatFailureLimit {
+						leaseErrors <- &leaseUncertainError{cause: err}
+						cancel()
+						return
+					}
+				} else {
+					failures = 0
 				}
 			}
 		}
 	}()
 
-	err := process()
+	err := process(processCtx)
 	cancel()
 	wg.Wait()
+	select {
+	case leaseErr := <-leaseErrors:
+		return leaseErr
+	default:
+	}
 	return err
 }
 

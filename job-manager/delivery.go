@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -8,7 +9,7 @@ import (
 	"path/filepath"
 )
 
-func notifyCircleOwner(task *Task) error {
+func notifyCircleOwner(ctx context.Context, task *Task) error {
 	if task.Owner == "" {
 		return fmt.Errorf("задача с ID %s не содержит корректного owner", task.ID)
 	}
@@ -21,6 +22,7 @@ func notifyCircleOwner(task *Task) error {
 	outputFilePath := filepath.Join(jobCacheDirectory(), task.ID+"_output.mp4")
 	url := fmt.Sprintf("%s/bot%s/sendVideoNote", BOT_ENDPOINT, BOT_TOKEN)
 	resp, err := doStreamingMultipartFileRequest(
+		ctx,
 		mediaHTTPClient,
 		http.MethodPost,
 		url,

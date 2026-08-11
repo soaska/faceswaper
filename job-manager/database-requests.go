@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -54,9 +55,9 @@ func authenticatePocketBase() error {
 
 // uploadOutputMedia stores the result but deliberately leaves task status
 // unchanged. A task becomes completed only after Telegram confirms delivery.
-func uploadOutputMedia(collection, taskID, filePath string) error {
+func uploadOutputMedia(ctx context.Context, collection, taskID, filePath string) error {
 	url := fmt.Sprintf("%s/api/collections/%s/records/%s", pocketBaseUrl, collection, taskID)
-	responseBody, statusCode, err := uploadOutputMediaOnce(url, filePath)
+	responseBody, statusCode, err := uploadOutputMediaOnce(ctx, url, filePath)
 	if err != nil {
 		return err
 	}
@@ -64,7 +65,7 @@ func uploadOutputMedia(collection, taskID, filePath string) error {
 		refreshMutex.Lock()
 		refreshErr := authenticatePocketBase()
 		if refreshErr == nil {
-			responseBody, statusCode, err = uploadOutputMediaOnce(url, filePath)
+			responseBody, statusCode, err = uploadOutputMediaOnce(ctx, url, filePath)
 		}
 		refreshMutex.Unlock()
 		if refreshErr != nil {
@@ -80,12 +81,13 @@ func uploadOutputMedia(collection, taskID, filePath string) error {
 	return nil
 }
 
-func uploadOutputMediaOnce(url, filePath string) ([]byte, int, error) {
+func uploadOutputMediaOnce(ctx context.Context, url, filePath string) ([]byte, int, error) {
 	headers := make(http.Header)
 	if token := currentAuthToken(); token != "" {
 		headers.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := doStreamingMultipartFileRequest(
+		ctx,
 		mediaHTTPClient,
 		http.MethodPatch,
 		url,

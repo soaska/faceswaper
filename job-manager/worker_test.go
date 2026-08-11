@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"mime"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -25,6 +27,69 @@ func TestTaskErrorStatusTruncatesValidUTF8(t *testing.T) {
 	}
 	if !strings.HasSuffix(status, "…") {
 		t.Fatalf("taskErrorStatus() = %q, want ellipsis", status)
+	}
+}
+
+func TestRunWithHeartbeatCancelsAfterRepeatedLeaseFailures(t *testing.T) {
+	oldInterval := heartbeatInterval
+	oldHeartbeat := heartbeatJobFunc
+	heartbeatInterval = time.Millisecond
+	var calls atomic.Int32
+	heartbeatJobFunc = func(_, _ string) error {
+		calls.Add(1)
+		return errors.New("PocketBase недоступен")
+	}
+	defer func() {
+		heartbeatInterval = oldInterval
+		heartbeatJobFunc = oldHeartbeat
+	}()
+
+	err := runWithHeartbeat(
+		context.Background(),
+		"face_jobs",
+		&Task{ID: "job1"},
+		func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	)
+	var leaseErr *leaseUncertainError
+	if !errors.As(err, &leaseErr) {
+		t.Fatalf("runWithHeartbeat() error = %v, want leaseUncertainError", err)
+	}
+	if got := calls.Load(); got != heartbeatFailureLimit {
+		t.Fatalf("heartbeat calls = %d, want %d", got, heartbeatFailureLimit)
+	}
+}
+
+func TestRunWithHeartbeatLeavesShutdownForLeaseRecovery(t *testing.T) {
+	oldInterval := heartbeatInterval
+	heartbeatInterval = time.Hour
+	defer func() { heartbeatInterval = oldInterval }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := runWithHeartbeat(ctx, "circle_jobs", &Task{ID: "job1"}, func(ctx context.Context) error {
+		return ctx.Err()
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("runWithHeartbeat() error = %v, want context.Canceled", err)
+	}
+	var leaseErr *leaseUncertainError
+	if errors.As(err, &leaseErr) {
+		t.Fatalf("shutdown was misclassified as lease failure: %v", err)
+	}
+}
+
+func TestTaskHandlersDoNotStartWorkAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	task := &Task{ID: "job1", Owner: "user1"}
+	if err := handleCircleTaskWithLease(ctx, task); !errors.Is(err, context.Canceled) {
+		t.Fatalf("handleCircleTaskWithLease() error = %v, want context.Canceled", err)
+	}
+	if err := handleFaceSwapTaskWithLease(ctx, task); !errors.Is(err, context.Canceled) {
+		t.Fatalf("handleFaceSwapTaskWithLease() error = %v, want context.Canceled", err)
 	}
 }
 
@@ -165,7 +230,7 @@ func TestUploadOutputMediaDoesNotCompleteTask(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := uploadOutputMedia("circle_jobs", "task1", tempFile.Name()); err != nil {
+	if err := uploadOutputMedia(context.Background(), "circle_jobs", "task1", tempFile.Name()); err != nil {
 		t.Fatalf("uploadOutputMedia() error = %v", err)
 	}
 	if statusField != "" {
