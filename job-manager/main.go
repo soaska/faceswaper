@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	sharedcleanup "github.com/soaska/faceswaper/shared/tempcleanup"
 )
 
 // Version info set at build time.
@@ -292,26 +294,14 @@ func waitForNextAttempt(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-func cleanupTempFiles() {
-	cacheDir := jobCacheDirectory()
-	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
-		return
-	}
-
-	files, err := filepath.Glob(filepath.Join(cacheDir, "*"))
+func cleanupTempFilesOnStartup() {
+	removed, err := sharedcleanup.RemoveContents(jobCacheDirectory())
 	if err != nil {
-		log.Printf("Ошибка поиска файлов кэша: %v", err)
+		log.Printf("Не удалось очистить временные файлы менеджера задач при запуске: %v", err)
 		return
 	}
-
-	for _, file := range files {
-		if info, err := os.Stat(file); err == nil && time.Since(info.ModTime()) > time.Hour {
-			if err := os.Remove(file); err != nil {
-				log.Printf("Не удалось удалить старый файл кэша %s: %v", file, err)
-			} else {
-				log.Printf("Удалён старый файл кэша: %s", file)
-			}
-		}
+	if removed > 0 {
+		log.Printf("Удалено временных файлов менеджера задач при запуске: %d", removed)
 	}
 }
 
@@ -356,7 +346,7 @@ func main() {
 	BOT_TOKEN, _, BOT_ENDPOINT, FaceSwapComponent_URL = LoadEnvironment()
 	workerID = initializeWorkerID()
 
-	cleanupTempFiles()
+	cleanupTempFilesOnStartup()
 	if err := initializeServices(); err != nil {
 		log.Fatalf("Ошибка инициализации сервисов: %v", err)
 	}

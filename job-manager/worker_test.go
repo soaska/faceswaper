@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -239,6 +240,26 @@ func TestCleanupTaskFilesOnlyRemovesRequestedTask(t *testing.T) {
 	}
 	if _, err := os.Stat(other); err != nil {
 		t.Fatalf("other task file was removed: %v", err)
+	}
+}
+
+func TestCleanupTempFilesOnStartupRemovesAllEntries(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("JOB_CACHE_DIR", cacheDir)
+	if err := os.WriteFile(filepath.Join(cacheDir, "recent.tmp"), []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(cacheDir, "abandoned-session"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupTempFilesOnStartup()
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("startup cleanup retained %d entries", len(entries))
 	}
 }
 

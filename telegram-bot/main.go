@@ -572,6 +572,7 @@ func main() {
 	token, debug, endpoint := LoadEnvironment()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	cleanupBotCacheOnStartup()
 
 	bot, err := initializeBot(ctx, token, endpoint)
 	if err != nil {
