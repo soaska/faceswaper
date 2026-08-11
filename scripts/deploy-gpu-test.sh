@@ -51,6 +51,7 @@ umask 077
 readonly target=$1
 readonly project_name=faceswaper-codex-test
 cd -- "$target"
+chown "$(id -u):$(id -g)" .env
 chmod 600 .env
 
 if docker compose version >/dev/null 2>&1; then
