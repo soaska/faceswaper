@@ -89,8 +89,20 @@ source "$generated_env"
 set +a
 
 compose_files=(-f compose.yaml -f compose.test.yaml)
+echo "Собираю PocketBase и подготавливаю администратора offline..."
+"${compose[@]}" "${compose_files[@]}" stop pocketbase </dev/null
+"${compose[@]}" "${compose_files[@]}" build pocketbase </dev/null
+
+if ! "${compose[@]}" "${compose_files[@]}" run --rm --no-deps \
+  --entrypoint sh pocketbase -ceu \
+  'exec /pb/pocketbase admin update "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data' </dev/null; then
+  "${compose[@]}" "${compose_files[@]}" run --rm --no-deps \
+    --entrypoint sh pocketbase -ceu \
+    'exec /pb/pocketbase admin create "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data' </dev/null
+fi
+
 echo "Запускаю PocketBase..."
-"${compose[@]}" "${compose_files[@]}" up -d --build pocketbase </dev/null
+"${compose[@]}" "${compose_files[@]}" up -d pocketbase </dev/null
 
 for attempt in {1..60}; do
   if "${compose[@]}" "${compose_files[@]}" exec -T pocketbase \
@@ -103,13 +115,6 @@ for attempt in {1..60}; do
   fi
   sleep 2
 done
-
-echo "Проверяю администратора PocketBase..."
-if ! "${compose[@]}" "${compose_files[@]}" exec -T pocketbase sh -ceu \
-  'exec /pb/pocketbase admin update "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data' </dev/null; then
-  "${compose[@]}" "${compose_files[@]}" exec -T pocketbase sh -ceu \
-    'exec /pb/pocketbase admin create "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data' </dev/null
-fi
 
 # The Telegram bot is intentionally absent. See the telegram-e2e profile in
 # compose.test.yaml before starting it against any real token.
