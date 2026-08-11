@@ -20,22 +20,31 @@ esac
 
 readonly script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 readonly project_dir=$(cd -- "$script_dir/.." && pwd)
+readonly -a ssh_options=(-o BatchMode=yes -o ConnectTimeout=15)
 
 if [[ ! -f "$project_dir/.env" ]]; then
   echo "Не найден $project_dir/.env" >&2
   exit 1
 fi
 
-ssh "$remote_host" mkdir -p -- "$remote_target"
-rsync -az --delete \
+ssh "${ssh_options[@]}" "$remote_host" mkdir -p -- "$remote_target"
+rsync -az --delete --info=stats1 \
+  -e "ssh -o BatchMode=yes -o ConnectTimeout=15" \
   --exclude=.git \
   --exclude=.env \
+  --exclude=.venv/ \
+  --exclude=.kilocode/ \
+  --exclude=.DS_Store \
+  --exclude=.pytest_cache/ \
+  --exclude=__pycache__/ \
+  --exclude='*.pyc' \
   --exclude=data/ \
   --exclude=temp/ \
   "$project_dir/" "$remote_host:$remote_target/"
-rsync -az "$project_dir/.env" "$remote_host:$remote_target/.env"
+rsync -az -e "ssh -o BatchMode=yes -o ConnectTimeout=15" \
+  "$project_dir/.env" "$remote_host:$remote_target/.env"
 
-ssh "$remote_host" bash -s -- "$remote_target" <<'REMOTE'
+ssh "${ssh_options[@]}" "$remote_host" bash -s -- "$remote_target" <<'REMOTE'
 set -Eeuo pipefail
 
 readonly target=$1
