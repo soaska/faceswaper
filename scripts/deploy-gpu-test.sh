@@ -93,13 +93,12 @@ echo "Собираю PocketBase и подготавливаю администр
 "${compose[@]}" "${compose_files[@]}" stop pocketbase </dev/null
 "${compose[@]}" "${compose_files[@]}" build pocketbase </dev/null
 
-if ! "${compose[@]}" "${compose_files[@]}" run --rm --no-deps \
+# PocketBase 0.22 CLI reports a missing/existing admin as text but still exits
+# with status 0. Run both operations and verify the real HTTP auth contract
+# after startup instead of branching on that unreliable exit code.
+"${compose[@]}" "${compose_files[@]}" run --rm --no-deps \
   --entrypoint sh pocketbase -ceu \
-  'exec /pb/pocketbase admin update "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data' </dev/null; then
-  "${compose[@]}" "${compose_files[@]}" run --rm --no-deps \
-    --entrypoint sh pocketbase -ceu \
-    'exec /pb/pocketbase admin create "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data' </dev/null
-fi
+  '/pb/pocketbase admin create "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data; exec /pb/pocketbase admin update "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD" --dir=/pb/pb_data' </dev/null
 
 echo "Запускаю PocketBase..."
 "${compose[@]}" "${compose_files[@]}" up -d pocketbase </dev/null
@@ -115,6 +114,13 @@ for attempt in {1..60}; do
   fi
   sleep 2
 done
+
+"${compose[@]}" "${compose_files[@]}" exec -T pocketbase sh -ceu '
+  payload=$(printf "{\"identity\":\"%s\",\"password\":\"%s\"}" "$PB_ADMIN_EMAIL" "$PB_ADMIN_PASSWORD")
+  curl --fail --silent --show-error --output /dev/null \
+    -H "Content-Type: application/json" -d "$payload" \
+    http://127.0.0.1:8080/api/admins/auth-with-password
+' </dev/null
 
 # The Telegram bot is intentionally absent. See the telegram-e2e profile in
 # compose.test.yaml before starting it against any real token.
