@@ -4,7 +4,6 @@ import asyncio
 import hmac
 import logging
 import os
-import shutil
 import subprocess
 import time
 import uuid
@@ -18,6 +17,7 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
 from pipeline import MediaValidationError
+from temp_cleanup import cleanup_contents, remove_directory
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -54,7 +54,9 @@ async def lifespan(app: FastAPI):
     if not model_path.is_file():
         raise RuntimeError(f"Модель не найдена: {model_path}")
 
-    cleanup_old_sessions(max_age_seconds=24 * 60 * 60)
+    removed = cleanup_contents(MEDIA_DIR)
+    if removed > 0:
+        logger.info("Удалено временных сессий при запуске: %s", removed)
     from runtime import create_processor
 
     app.state.processor = await run_in_threadpool(
@@ -115,21 +117,7 @@ def safe_suffix(filename: str | None, allowed: set[str]) -> str:
 
 
 def cleanup_session(session_directory: Path) -> None:
-    shutil.rmtree(session_directory, ignore_errors=True)
-
-
-def cleanup_old_sessions(max_age_seconds: int) -> None:
-    if not MEDIA_DIR.exists():
-        return
-    cutoff = time.time() - max_age_seconds
-    for item in MEDIA_DIR.iterdir():
-        try:
-            if item.stat().st_mtime < cutoff:
-                cleanup_session(item) if item.is_dir() else item.unlink()
-        except FileNotFoundError:
-            continue
-        except OSError as error:
-            logger.warning("Не удалось удалить старый файл %s: %s", item, error)
+    remove_directory(session_directory)
 
 
 def result_response(
