@@ -338,7 +338,11 @@ func handleStart(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 	if name == "" {
 		name = message.From.FirstName
 	}
-	greeting := fmt.Sprintf(
+	sendText(bot, message.Chat.ID, startMessage(name))
+}
+
+func startMessage(name string) string {
+	return fmt.Sprintf(
 		"👋 Привет, %s! Добро пожаловать в бот для создания кружков и замены лиц!\n\n"+
 			"🎯 Что я умею:\n"+
 			"• Создавать кружки из видео (1 монета)\n"+
@@ -350,11 +354,14 @@ func handleStart(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
 			"📢 Новости: https://t.me/+HGQVwMhFzIExZDNi",
 		name,
 	)
-	sendText(bot, message.Chat.ID, greeting)
 }
 
 func handleHelp(bot *tgbotapi.BotAPI, chatID int64) {
-	helpMessage := "📚 Список доступных команд:\n\n" +
+	sendText(bot, chatID, helpMessage())
+}
+
+func helpMessage() string {
+	return "📚 Список доступных команд:\n\n" +
 		"🎥 Создание кружка (1 монета):\n• Отправьте видео\n• Дождитесь обработки\n\n" +
 		"👤 Замена лица на фото (1 монета):\n• Отправьте фото лица\n• Отправьте второе фото\n• Дождитесь обработки\n\n" +
 		"🎬 Замена лица на видео (2+ монет):\n• Отправьте фото лица\n• Отправьте видео\n• Дождитесь обработки\n\n" +
@@ -364,7 +371,6 @@ func handleHelp(bot *tgbotapi.BotAPI, chatID int64) {
 		"• Качество: 1–100 (по умолчанию 12)\n• Требуется положительный баланс монет\n\n" +
 		"📊 /status — проверить статус и баланс\n❓ /help — показать это сообщение\n\n" +
 		"📢 Новости и обновления: https://t.me/+HGQVwMhFzIExZDNi"
-	sendText(bot, chatID, helpMessage)
 }
 
 func handleCompressCommand(bot *tgbotapi.BotAPI, message *tgbotapi.Message, args []string) {
@@ -557,8 +563,8 @@ func main() {
 	if len(GitCommit) > 8 {
 		commitShort = GitCommit[:8]
 	}
-	log.Println("🤖 Telegram Bot запущен")
-	log.Printf("📦 Версия: %s — %s", commitShort, GitMessage)
+	log.Println("Telegram Bot запущен")
+	log.Printf("Версия: %s — %s", commitShort, GitMessage)
 
 	token, debug, endpoint := LoadEnvironment()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

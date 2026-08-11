@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
         MAX_FRAME_PIXELS,
         MAX_IMAGE_PIXELS,
     )
-    logger.info("🚀 Face Swap Component запущен, устройство=%s", DEVICE_TYPE)
+    logger.info("Face Swap Component запущен, устройство=%s", DEVICE_TYPE)
     yield
 
 

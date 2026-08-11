@@ -154,9 +154,9 @@ func LoadEnvironment() (string, bool, string, string) {
 		log.Fatal("POCKETBASE_PASSWORD не задан")
 	}
 
-	faceSwapURL := strings.TrimRight(strings.TrimSpace(os.Getenv("FaceSwapComponent_URL")), "/")
+	faceSwapURL := configuredFaceSwapURL()
 	if faceSwapURL == "" {
-		log.Fatal("FaceSwapComponent_URL не задан")
+		log.Fatal("FACE_SWAP_URL не задан")
 	}
 	FaceSwapAPIKey = strings.TrimSpace(os.Getenv("FACE_SWAP_API_KEY"))
 	if FaceSwapAPIKey == "" {
@@ -164,6 +164,15 @@ func LoadEnvironment() (string, bool, string, string) {
 	}
 
 	return botToken, botDebug, botEndpoint, faceSwapURL
+}
+
+func configuredFaceSwapURL() string {
+	faceSwapURL := strings.TrimRight(strings.TrimSpace(os.Getenv("FACE_SWAP_URL")), "/")
+	if faceSwapURL == "" {
+		// Backward compatibility for deployments created by the old AI branch.
+		faceSwapURL = strings.TrimRight(strings.TrimSpace(os.Getenv("FaceSwapComponent_URL")), "/")
+	}
+	return faceSwapURL
 }
 
 func downloadFile(url, destination string) error {

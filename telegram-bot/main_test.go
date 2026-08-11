@@ -60,3 +60,18 @@ func TestFormatStatusUsesTypedValuesAndHidesClearedErrors(t *testing.T) {
 		t.Fatalf("status contains invalid data: %s", status)
 	}
 }
+
+func TestMenusKeepMainStyleAndExposeCurrentFeatures(t *testing.T) {
+	start := startMessage("tester")
+	help := helpMessage()
+	for _, expected := range []string{"Привет, tester", "создания кружков", "замены лиц", "/help", "/status"} {
+		if !strings.Contains(start, expected) {
+			t.Errorf("start message does not contain %q: %s", expected, start)
+		}
+	}
+	for _, expected := range []string{"Создание кружка", "Замена лица на фото", "Замена лица на видео", "/compress", "/cancel", "/status", "/help"} {
+		if !strings.Contains(help, expected) {
+			t.Errorf("help message does not contain %q: %s", expected, help)
+		}
+	}
+}

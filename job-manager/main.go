@@ -332,8 +332,8 @@ func main() {
 	if len(GitCommit) > 8 {
 		commitShort = GitCommit[:8]
 	}
-	log.Println("🚀 Job Manager запущен")
-	log.Printf("📦 Версия: %s — %s", commitShort, GitMessage)
+	log.Println("Job Manager запущен")
+	log.Printf("Версия: %s — %s", commitShort, GitMessage)
 
 	BOT_TOKEN, _, BOT_ENDPOINT, FaceSwapComponent_URL = LoadEnvironment()
 	workerID = initializeWorkerID()

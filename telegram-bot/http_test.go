@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -10,6 +11,52 @@ import (
 	"testing"
 	"time"
 )
+
+func TestGetOrCreateUserPreservesMainDefaults(t *testing.T) {
+	var created UserRecord
+	requests := 0
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if request.Method == http.MethodGet {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"items":[]}`)),
+				Header:     make(http.Header),
+			}, nil
+		}
+		if err := json.NewDecoder(request.Body).Decode(&created); err != nil {
+			t.Fatalf("decode created user: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"id":"user1"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	oldClient := apiHTTPClient
+	oldURL := pocketBaseUrl
+	apiHTTPClient = &http.Client{Transport: transport}
+	pocketBaseUrl = "http://pocketbase.test"
+	defer func() {
+		apiHTTPClient = oldClient
+		pocketBaseUrl = oldURL
+	}()
+
+	userID, err := getOrCreateUser(123456, "tester")
+	if err != nil {
+		t.Fatalf("getOrCreateUser() error = %v", err)
+	}
+	if userID != "user1" || requests != 2 {
+		t.Fatalf("getOrCreateUser() = %q after %d requests", userID, requests)
+	}
+	if created.TGID != 123456 || created.Username != "tester" {
+		t.Fatalf("identity fields = %#v", created)
+	}
+	if created.Coins != 200 || created.CircleCount != 0 || created.FaceReplaceCount != 0 {
+		t.Fatalf("main-compatible defaults = %#v", created)
+	}
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 

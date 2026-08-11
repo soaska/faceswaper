@@ -71,7 +71,7 @@ services:
       DOCKER_BUILD: "1"
       TELEGRAM_API: http://telegram-bot-api:8081
       POCKETBASE_URL: http://pocketbase:8080
-      FaceSwapComponent_URL: http://face-swap-component:7860
+      FACE_SWAP_URL: http://face-swap-component:7860
       JOB_CACHE_DIR: /temp/job-manager
     env_file:
       - .env

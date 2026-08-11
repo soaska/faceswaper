@@ -36,6 +36,22 @@ func TestSanitizeWorkerID(t *testing.T) {
 	}
 }
 
+func TestConfiguredFaceSwapURLPrefersMainStyleName(t *testing.T) {
+	t.Setenv("FACE_SWAP_URL", " http://preferred:7860/ ")
+	t.Setenv("FaceSwapComponent_URL", "http://legacy:7860")
+	if got, want := configuredFaceSwapURL(), "http://preferred:7860"; got != want {
+		t.Fatalf("configuredFaceSwapURL() = %q, want %q", got, want)
+	}
+}
+
+func TestConfiguredFaceSwapURLSupportsLegacyName(t *testing.T) {
+	t.Setenv("FACE_SWAP_URL", "")
+	t.Setenv("FaceSwapComponent_URL", "http://legacy:7860/")
+	if got, want := configuredFaceSwapURL(), "http://legacy:7860"; got != want {
+		t.Fatalf("configuredFaceSwapURL() = %q, want %q", got, want)
+	}
+}
+
 func TestCleanupTaskFilesOnlyRemovesRequestedTask(t *testing.T) {
 	cacheDir := t.TempDir()
 	t.Setenv("JOB_CACHE_DIR", cacheDir)
