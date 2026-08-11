@@ -92,23 +92,3 @@ func getOwnerData(ownerID string) (ownerData, error) {
 	}
 	return result, nil
 }
-
-func updateTaskDurationPriceAndThreads(taskID string, duration, price, threads int) error {
-	payload, err := json.Marshal(map[string]int{
-		"duration": duration,
-		"price":    price,
-		"threads":  threads,
-	})
-	if err != nil {
-		return fmt.Errorf("ошибка сериализации данных задачи: %v", err)
-	}
-	_, err = sendAuthorizedRequest(
-		http.MethodPatch,
-		fmt.Sprintf("%s/api/collections/face_jobs/records/%s", pocketBaseUrl, taskID),
-		payload,
-	)
-	if err != nil {
-		return fmt.Errorf("ошибка обновления данных задачи: %v", err)
-	}
-	return nil
-}
