@@ -4,7 +4,7 @@ FROM golang:1.26.5-alpine AS builder
 ARG GIT_COMMIT=unknown
 
 WORKDIR /build
-COPY shared/go.mod ./shared/go.mod
+COPY shared/go.mod shared/go.sum ./shared/
 COPY telegram-bot/go.mod telegram-bot/go.sum ./telegram-bot/
 WORKDIR /build/telegram-bot
 RUN go mod download

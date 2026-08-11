@@ -13,7 +13,7 @@ import (
 	"time"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
-	"github.com/joho/godotenv"
+	sharedconfig "github.com/soaska/faceswaper/shared/config"
 	sharedpb "github.com/soaska/faceswaper/shared/pocketbase"
 )
 
@@ -153,35 +153,11 @@ func botCacheDirectory() string {
 }
 
 func LoadEnvironment() (string, bool, string) {
-	if os.Getenv("DOCKER_BUILD") == "" {
-		if err := godotenv.Load(); err != nil {
-			log.Fatal("Не удалось загрузить .env")
-		}
+	common, err := sharedconfig.LoadCommon()
+	if err != nil {
+		log.Fatal(err)
 	}
-
-	botToken := strings.TrimSpace(os.Getenv("TELEGRAM_APITOKEN"))
-	if botToken == "" {
-		log.Fatal("TELEGRAM_APITOKEN не задан")
-	}
-	botDebug := os.Getenv("BOT_DEBUG") == "true"
-
-	apiEndpoint = strings.TrimRight(strings.TrimSpace(os.Getenv("TELEGRAM_API")), "/")
-	if apiEndpoint == "" {
-		apiEndpoint = "https://api.telegram.org"
-	}
-	pocketBaseUrl = strings.TrimRight(strings.TrimSpace(os.Getenv("POCKETBASE_URL")), "/")
-	if pocketBaseUrl == "" {
-		log.Fatal("POCKETBASE_URL не задан")
-	}
-	email := strings.TrimSpace(os.Getenv("POCKETBASE_LOGIN"))
-	if email == "" {
-		log.Fatal("POCKETBASE_LOGIN не задан")
-	}
-	password := os.Getenv("POCKETBASE_PASSWORD")
-	if password == "" {
-		log.Fatal("POCKETBASE_PASSWORD не задан")
-	}
-	configurePocketBase(pocketBaseUrl, email, password, apiHTTPClient)
-
-	return botToken, botDebug, apiEndpoint
+	apiEndpoint = common.TelegramAPI
+	configurePocketBase(common.PocketBaseURL, common.PocketBaseID, common.PocketBaseKey, apiHTTPClient)
+	return common.TelegramToken, common.TelegramDebug, common.TelegramAPI
 }
