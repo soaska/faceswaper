@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine AS builder
+FROM golang:1.26.5-alpine AS builder
 
 # Build arguments for version info
 ARG GIT_COMMIT=unknown
