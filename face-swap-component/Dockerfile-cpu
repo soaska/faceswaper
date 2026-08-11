@@ -20,9 +20,6 @@ RUN pip3 install --no-cache-dir -r requirements-cpu.lock
 # Create working directory
 WORKDIR /app
 
-# Copy application files
-COPY . .
-
 # Create necessary directories
 RUN mkdir -p /temp/models /temp/media /temp/cache
 
@@ -33,6 +30,9 @@ RUN wget -q https://github.com/deepinsight/insightface/releases/download/v0.7/in
 
 # Build arguments for version info
 ARG GIT_COMMIT=unknown
+
+# Copy application files after the stable dependency and model layers.
+COPY . .
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
