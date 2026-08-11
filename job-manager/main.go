@@ -314,7 +314,6 @@ func cleanupTaskFiles(taskID string) {
 func initializeServices() error {
 	for retries := 0; retries < 5; retries++ {
 		if err := authenticatePocketBase(); err == nil {
-			log.Println("Авторизация PocketBase успешна")
 			return nil
 		} else {
 			log.Printf("Ошибка авторизации PocketBase (попытка %d/5): %v", retries+1, err)
@@ -325,21 +324,21 @@ func initializeServices() error {
 }
 
 func main() {
+	BOT_TOKEN, _, BOT_ENDPOINT, FaceSwapComponent_URL = LoadEnvironment()
+	workerID = initializeWorkerID()
+
+	cleanupTempFiles()
+	if err := initializeServices(); err != nil {
+		log.Fatalf("Ошибка инициализации сервисов: %v", err)
+	}
+
 	commitShort := GitCommit
 	if len(GitCommit) > 8 {
 		commitShort = GitCommit[:8]
 	}
 	log.Println("Job Manager запущен")
 	log.Printf("Версия: %s", commitShort)
-
-	BOT_TOKEN, _, BOT_ENDPOINT, FaceSwapComponent_URL = LoadEnvironment()
-	workerID = initializeWorkerID()
 	log.Printf("Воркер: %s", workerID)
-
-	cleanupTempFiles()
-	if err := initializeServices(); err != nil {
-		log.Fatalf("Ошибка инициализации сервисов: %v", err)
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

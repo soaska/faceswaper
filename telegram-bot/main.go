@@ -556,13 +556,6 @@ func waitContext(ctx context.Context, delay time.Duration) bool {
 }
 
 func main() {
-	commitShort := GitCommit
-	if len(GitCommit) > 8 {
-		commitShort = GitCommit[:8]
-	}
-	log.Println("Telegram Bot запущен")
-	log.Printf("Версия: %s", commitShort)
-
 	token, debug, endpoint := LoadEnvironment()
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -573,6 +566,13 @@ func main() {
 		return
 	}
 	bot.Debug = debug
+
+	commitShort := GitCommit
+	if len(GitCommit) > 8 {
+		commitShort = GitCommit[:8]
+	}
+	log.Println("Telegram Bot запущен")
+	log.Printf("Версия: %s", commitShort)
 	if debug {
 		log.Println("Бот работает в режиме DEBUG")
 	}
