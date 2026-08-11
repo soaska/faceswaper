@@ -27,7 +27,7 @@ var (
 func handleCompressImage(bot *tgbotapi.BotAPI, chatID, tgUserID int64, userID, fileID string, quality int) {
 	user, err := getUserInfo(tgUserID)
 	if err != nil {
-		log.Printf("Ошибка проверки баланса пользователя %d: %v", chatID, err)
+		log.Printf("Ошибка проверки баланса пользователя %d: %v", tgUserID, err)
 		sendText(bot, chatID, "Ошибка при проверке баланса.")
 		return
 	}
@@ -56,7 +56,11 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID, tgUserID int64, userID, f
 		return
 	}
 	outputPath := outputFile.Name()
-	defer os.Remove(outputPath)
+	defer func() {
+		if err := os.Remove(outputPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("Не удалось удалить временный файл сжатия %s: %v", outputPath, err)
+		}
+	}()
 
 	inputFile, err := os.Open(inputPath)
 	if err != nil {
@@ -76,6 +80,7 @@ func handleCompressImage(bot *tgbotapi.BotAPI, chatID, tgUserID int64, userID, f
 	if closeErr != nil {
 		_ = outputFile.Close()
 		log.Printf("Ошибка закрытия изображения: %v", closeErr)
+		sendText(bot, chatID, "Ошибка чтения изображения.")
 		return
 	}
 

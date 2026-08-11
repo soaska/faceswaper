@@ -94,12 +94,14 @@ func getOrCreateUser(tgUserID int64, tgUsername string) (string, error) {
 		return user.ID, nil
 	}
 
-	payload, err := json.Marshal(UserRecord{
-		TGID:             tgUserID,
-		Username:         tgUsername,
-		Coins:            200,
-		CircleCount:      0,
-		FaceReplaceCount: 0,
+	// Keep the original main data contract explicit. PocketBase owns record IDs
+	// and the persistent session fields remain empty until a face is received.
+	payload, err := json.Marshal(map[string]interface{}{
+		"tgid":               tgUserID,
+		"username":           tgUsername,
+		"coins":              200,
+		"circle_count":       0,
+		"face_replace_count": 0,
 	})
 	if err != nil {
 		return "", fmt.Errorf("ошибка сериализации пользователя: %v", err)

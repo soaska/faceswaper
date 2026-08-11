@@ -14,6 +14,7 @@ import (
 
 func TestGetOrCreateUserPreservesMainDefaults(t *testing.T) {
 	var created UserRecord
+	var createdFields map[string]interface{}
 	requests := 0
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		requests++
@@ -24,8 +25,15 @@ func TestGetOrCreateUserPreservesMainDefaults(t *testing.T) {
 				Header:     make(http.Header),
 			}, nil
 		}
-		if err := json.NewDecoder(request.Body).Decode(&created); err != nil {
+		if err := json.NewDecoder(request.Body).Decode(&createdFields); err != nil {
 			t.Fatalf("decode created user: %v", err)
+		}
+		encoded, err := json.Marshal(createdFields)
+		if err != nil {
+			t.Fatalf("encode created user: %v", err)
+		}
+		if err := json.Unmarshal(encoded, &created); err != nil {
+			t.Fatalf("decode typed created user: %v", err)
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -55,6 +63,14 @@ func TestGetOrCreateUserPreservesMainDefaults(t *testing.T) {
 	}
 	if created.Coins != 200 || created.CircleCount != 0 || created.FaceReplaceCount != 0 {
 		t.Fatalf("main-compatible defaults = %#v", created)
+	}
+	if len(createdFields) != 5 {
+		t.Fatalf("main-compatible fields = %#v", createdFields)
+	}
+	for _, field := range []string{"tgid", "username", "coins", "circle_count", "face_replace_count"} {
+		if _, ok := createdFields[field]; !ok {
+			t.Errorf("main-compatible field %q is missing: %#v", field, createdFields)
+		}
 	}
 }
 
