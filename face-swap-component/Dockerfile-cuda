@@ -24,12 +24,13 @@ ARG GIT_COMMIT=unknown
 ARG GIT_MESSAGE=unknown
 
 WORKDIR /app
-COPY . .
 RUN mkdir -p /temp/models /temp/media /temp/cache
 
 RUN wget -q https://github.com/deepinsight/insightface/releases/download/v0.7/inswapper_128.onnx \
         -O /temp/models/inswapper_128.onnx \
     && echo "e4a3f08c753cb72d04e10aa0f7dbe3deebbf39567d4ead6dce08e98aa49e16af  /temp/models/inswapper_128.onnx" | sha256sum -c -
+
+COPY . .
 
 ENV PYTHONUNBUFFERED=1 \
     CUDA_VISIBLE_DEVICES=0 \
