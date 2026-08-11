@@ -1,6 +1,6 @@
 services:
   telegram-bot-api:
-    image: ${TELEGRAM_BOT_API_IMAGE:-aiogram/telegram-bot-api:latest}
+    image: ${TELEGRAM_BOT_API_IMAGE:-aiogram/telegram-bot-api@sha256:af7603382a56586f90c2a597faf56bc082287025be516eff4230330cd1b0457b}
     environment:
       TELEGRAM_LOCAL: "1"
     env_file:
