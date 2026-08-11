@@ -47,7 +47,8 @@ face_job=
 token=
 
 cleanup() {
-  set +e
+	status=$?
+	set +e
   if [[ -n "$token" && -n "$user_id" ]]; then
     operations=$(curl --silent \
       -H "Authorization: Bearer $token" \
@@ -71,6 +72,7 @@ cleanup() {
       "$api/api/collections/users/records/$user_id"
   fi
   "${compose[@]}" "${compose_files[@]}" up -d job-manager </dev/null >/dev/null
+	return "$status"
 }
 trap cleanup EXIT
 
@@ -91,12 +93,14 @@ user_response=$(curl --fail --silent "${auth[@]}" "${json[@]}" \
   -d '{"tgid":9000000001,"username":"settlement-smoke","circle_count":0,"face_replace_count":0,"coins":200}' \
   "$api/api/collections/users/records")
 user_id=$(printf '%s' "$user_response" | jq -er '.id')
+echo "Settlement smoke: временный пользователь создан"
 
 circle_response=$(curl --fail --silent "${auth[@]}" \
   -F "owner=$user_id" -F 'status=queued' -F 'request_key=smoke:circle' \
   -F 'input_media=@/etc/hosts;filename=input.mp4' \
   "$api/api/collections/circle_jobs/records")
 circle_job=$(printf '%s' "$circle_response" | jq -er '.id')
+echo "Settlement smoke: circle job создан"
 
 claim=$(jq -nc --arg collection circle_jobs --arg worker settlement-smoke \
   '{collection:$collection,worker_id:$worker}')
@@ -109,6 +113,7 @@ for _ in 1 2; do
   curl --fail --silent "${auth[@]}" "${json[@]}" -d "$start_circle" \
     "$api/api/faceswaper/jobs/settle" | jq -e '.ok and .price == 1 and .balance == 199' >/dev/null
 done
+echo "Settlement smoke: повторное списание circle идемпотентно"
 
 fail_circle=$(jq -nc --arg id "$circle_job" \
   '{collection:"circle_jobs",task_id:$id,worker_id:"settlement-smoke",action:"fail",error:"тестовая ошибка доставки"}')
@@ -116,6 +121,7 @@ for _ in 1 2; do
   curl --fail --silent "${auth[@]}" "${json[@]}" -d "$fail_circle" \
     "$api/api/faceswaper/jobs/settle" | jq -e '.ok' >/dev/null
 done
+echo "Settlement smoke: circle fail/refund идемпотентен"
 
 curl --fail --silent "${auth[@]}" "$api/api/collections/users/records/$user_id" \
   | jq -e '.coins == 200 and .circle_count == 0 and .face_replace_count == 0' >/dev/null
@@ -128,6 +134,7 @@ face_response=$(curl --fail --silent "${auth[@]}" \
   -F 'input_face=@/etc/hosts;filename=source.jpg' \
   "$api/api/collections/face_jobs/records")
 face_job=$(printf '%s' "$face_response" | jq -er '.id')
+echo "Settlement smoke: face job создан"
 
 claim=$(jq -nc --arg collection face_jobs --arg worker settlement-smoke \
   '{collection:$collection,worker_id:$worker}')
@@ -140,6 +147,7 @@ for _ in 1 2; do
   curl --fail --silent "${auth[@]}" "${json[@]}" -d "$start_face" \
     "$api/api/faceswaper/jobs/settle" | jq -e '.ok and .price == 3 and .balance == 197' >/dev/null
 done
+echo "Settlement smoke: повторное списание face идемпотентно"
 
 complete_face=$(jq -nc --arg id "$face_job" \
   '{collection:"face_jobs",task_id:$id,worker_id:"settlement-smoke",action:"complete"}')
@@ -147,6 +155,7 @@ for _ in 1 2; do
   curl --fail --silent "${auth[@]}" "${json[@]}" -d "$complete_face" \
     "$api/api/faceswaper/jobs/settle" | jq -e '.ok' >/dev/null
 done
+echo "Settlement smoke: face complete идемпотентен"
 
 curl --fail --silent "${auth[@]}" "$api/api/collections/users/records/$user_id" \
   | jq -e '.coins == 197 and .circle_count == 0 and .face_replace_count == 1' >/dev/null
