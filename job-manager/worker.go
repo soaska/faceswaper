@@ -177,8 +177,9 @@ func runWithHeartbeat(ctx context.Context, collection string, task *Task, proces
 func taskErrorStatus(err error) string {
 	message := strings.TrimSpace(err.Error())
 	const maxErrorLength = 450
-	if len(message) > maxErrorLength {
-		message = message[:maxErrorLength] + "…"
+	runes := []rune(message)
+	if len(runes) > maxErrorLength {
+		message = string(runes[:maxErrorLength]) + "…"
 	}
 	return statusError + ": " + message
 }

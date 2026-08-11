@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -9,9 +10,23 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func TestTaskErrorStatusTruncatesValidUTF8(t *testing.T) {
+	status := taskErrorStatus(errors.New(strings.Repeat("я", 500)))
+	if !utf8.ValidString(status) {
+		t.Fatalf("taskErrorStatus() returned invalid UTF-8: %q", status)
+	}
+	if got, want := utf8.RuneCountInString(status), utf8.RuneCountInString("error: ")+450+1; got != want {
+		t.Fatalf("taskErrorStatus() rune count = %d, want %d", got, want)
+	}
+	if !strings.HasSuffix(status, "…") {
+		t.Fatalf("taskErrorStatus() = %q, want ellipsis", status)
+	}
+}
 
 func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return fn(request)
