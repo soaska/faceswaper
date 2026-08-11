@@ -46,10 +46,12 @@ rsync -az -e "ssh -o BatchMode=yes -o ConnectTimeout=15" \
 
 ssh "${ssh_options[@]}" "$remote_host" bash -s -- "$remote_target" <<'REMOTE'
 set -Eeuo pipefail
+umask 077
 
 readonly target=$1
 readonly project_name=faceswaper-codex-test
 cd -- "$target"
+chmod 600 .env
 
 if docker compose version >/dev/null 2>&1; then
   compose=(docker compose)
