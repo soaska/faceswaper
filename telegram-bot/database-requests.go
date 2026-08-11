@@ -1,11 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +14,7 @@ import (
 	"time"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
+	"github.com/soaska/faceswaper/shared/multipartstream"
 )
 
 type UserRecord struct {
@@ -221,10 +222,7 @@ func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, requestKey 
 	})
 }
 
-type uploadFile struct {
-	Field string
-	Path  string
-}
+type uploadFile = multipartstream.File
 
 func createJobRecord(collection, userID, requestKey string, files []uploadFile) (string, error) {
 	for _, upload := range files {
@@ -271,76 +269,32 @@ func createJobRecord(collection, userID, requestKey string, files []uploadFile) 
 }
 
 func uploadJobOnce(requestURL, userID, requestKey string, files []uploadFile, token string) ([]byte, int, error) {
-	reader, writer := io.Pipe()
-	multipartWriter := multipart.NewWriter(writer)
-	contentType := multipartWriter.FormDataContentType()
-	writeResult := make(chan error, 1)
-	go func() {
-		err := writeJobMultipart(multipartWriter, userID, requestKey, files)
-		if err == nil {
-			err = multipartWriter.Close()
-		}
-		_ = writer.CloseWithError(err)
-		writeResult <- err
-	}()
-
-	req, err := http.NewRequest(http.MethodPost, requestURL, reader)
-	if err != nil {
-		_ = reader.CloseWithError(err)
-		<-writeResult
-		return nil, 0, fmt.Errorf("ошибка создания запроса задачи: %v", err)
-	}
-	req.Header.Set("Content-Type", contentType)
+	headers := make(http.Header)
 	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+		headers.Set("Authorization", "Bearer "+token)
 	}
-
-	resp, err := mediaClient.Do(req)
+	resp, err := multipartstream.Do(
+		context.Background(),
+		mediaClient,
+		http.MethodPost,
+		requestURL,
+		headers,
+		map[string]string{
+			"owner":       userID,
+			"status":      "queued",
+			"request_key": requestKey,
+		},
+		files,
+	)
 	if err != nil {
-		_ = reader.CloseWithError(err)
-		<-writeResult
 		return nil, 0, fmt.Errorf("ошибка загрузки задачи: %v", err)
 	}
 	defer resp.Body.Close()
-	body, readErr := io.ReadAll(resp.Body)
-	writeErr := <-writeResult
-	if writeErr != nil {
-		return nil, resp.StatusCode, fmt.Errorf("ошибка формирования задачи: %v", writeErr)
-	}
-	if readErr != nil {
-		return nil, resp.StatusCode, fmt.Errorf("ошибка чтения ответа создания задачи: %v", readErr)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("ошибка чтения ответа создания задачи: %v", err)
 	}
 	return body, resp.StatusCode, nil
-}
-
-func writeJobMultipart(writer *multipart.Writer, userID, requestKey string, files []uploadFile) error {
-	if err := writer.WriteField("owner", userID); err != nil {
-		return err
-	}
-	if err := writer.WriteField("status", "queued"); err != nil {
-		return err
-	}
-	if err := writer.WriteField("request_key", requestKey); err != nil {
-		return err
-	}
-	for _, upload := range files {
-		file, err := os.Open(upload.Path)
-		if err != nil {
-			return err
-		}
-		part, err := writer.CreateFormFile(upload.Field, filepath.Base(upload.Path))
-		if err == nil {
-			_, err = io.Copy(part, file)
-		}
-		closeErr := file.Close()
-		if err != nil {
-			return err
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-	}
-	return nil
 }
 
 func findJobByRequestKey(collection, requestKey string) string {

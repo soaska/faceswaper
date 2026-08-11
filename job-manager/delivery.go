@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+
+	"github.com/soaska/faceswaper/shared/multipartstream"
 )
 
 func notifyCircleOwner(ctx context.Context, task *Task) error {
@@ -21,15 +23,14 @@ func notifyCircleOwner(ctx context.Context, task *Task) error {
 
 	outputFilePath := filepath.Join(jobCacheDirectory(), task.ID+"_output.mp4")
 	url := fmt.Sprintf("%s/bot%s/sendVideoNote", BOT_ENDPOINT, BOT_TOKEN)
-	resp, err := doStreamingMultipartFileRequest(
+	resp, err := multipartstream.Do(
 		ctx,
 		mediaHTTPClient,
 		http.MethodPost,
 		url,
 		nil,
 		map[string]string{"chat_id": ownerTGID},
-		"video_note",
-		outputFilePath,
+		[]multipartstream.File{{Field: "video_note", Path: outputFilePath}},
 	)
 	if err != nil {
 		return fmt.Errorf("ошибка отправки кружка: %v", err)

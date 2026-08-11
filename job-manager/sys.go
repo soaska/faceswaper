@@ -13,6 +13,7 @@ import (
 	"time"
 
 	sharedconfig "github.com/soaska/faceswaper/shared/config"
+	"github.com/soaska/faceswaper/shared/multipartstream"
 	sharedpb "github.com/soaska/faceswaper/shared/pocketbase"
 )
 
@@ -159,15 +160,14 @@ func sendTelegramPhoto(ctx context.Context, chatID, filePath string) error {
 
 func sendTelegramFile(ctx context.Context, method, field, chatID, filePath string) error {
 	url := fmt.Sprintf("%s/bot%s/%s", BOT_ENDPOINT, BOT_TOKEN, method)
-	resp, err := doStreamingMultipartFileRequest(
+	resp, err := multipartstream.Do(
 		ctx,
 		mediaHTTPClient,
 		http.MethodPost,
 		url,
 		nil,
 		map[string]string{"chat_id": chatID},
-		field,
-		filePath,
+		[]multipartstream.File{{Field: field, Path: filePath}},
 	)
 	if err != nil {
 		return fmt.Errorf("ошибка запроса Telegram: %v", err)

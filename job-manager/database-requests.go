@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+
+	"github.com/soaska/faceswaper/shared/multipartstream"
 )
 
 // uploadOutputMedia stores the result but deliberately leaves task status
@@ -30,15 +32,14 @@ func uploadOutputMediaOnce(ctx context.Context, url, filePath, token string) ([]
 	if token != "" {
 		headers.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := doStreamingMultipartFileRequest(
+	resp, err := multipartstream.Do(
 		ctx,
 		mediaHTTPClient,
 		http.MethodPatch,
 		url,
 		headers,
 		nil,
-		"output_media",
-		filePath,
+		[]multipartstream.File{{Field: "output_media", Path: filePath}},
 	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("ошибка загрузки файла: %v", err)

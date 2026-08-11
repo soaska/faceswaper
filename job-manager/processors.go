@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/soaska/faceswaper/shared/multipartstream"
 )
 
 // Process circle creation task
@@ -197,39 +198,24 @@ func processPhotoSwapComponent(ctx context.Context, sourceImage, targetImage, ou
 }
 
 func requestFaceSwap(ctx context.Context, endpoint, sourcePath, targetPath, targetField, outputPath, expectedMedia string) (int, int, error) {
-	reader, pipeWriter := io.Pipe()
-	multipartWriter := multipart.NewWriter(pipeWriter)
-	contentType := multipartWriter.FormDataContentType()
-	writeResult := make(chan error, 1)
-	go func() {
-		err := writeFaceSwapMultipart(multipartWriter, sourcePath, targetPath, targetField)
-		if err == nil {
-			err = multipartWriter.Close()
-		}
-		_ = pipeWriter.CloseWithError(err)
-		writeResult <- err
-	}()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, FaceSwapComponent_URL+endpoint, reader)
+	headers := make(http.Header)
+	headers.Set("X-API-Key", FaceSwapAPIKey)
+	resp, err := multipartstream.Do(
+		ctx,
+		mediaHTTPClient,
+		http.MethodPost,
+		FaceSwapComponent_URL+endpoint,
+		headers,
+		nil,
+		[]multipartstream.File{
+			{Field: "source_image", Path: sourcePath},
+			{Field: targetField, Path: targetPath},
+		},
+	)
 	if err != nil {
-		_ = reader.CloseWithError(err)
-		<-writeResult
-		return 0, 0, fmt.Errorf("ошибка создания запроса FaceSwap: %v", err)
-	}
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("X-API-Key", FaceSwapAPIKey)
-
-	resp, err := mediaHTTPClient.Do(req)
-	if err != nil {
-		_ = reader.CloseWithError(err)
-		<-writeResult
 		return 0, 0, fmt.Errorf("ошибка запроса FaceSwap: %v", err)
 	}
 	defer resp.Body.Close()
-	writeErr := <-writeResult
-	if writeErr != nil {
-		return 0, 0, fmt.Errorf("ошибка загрузки файлов в FaceSwap: %v", writeErr)
-	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2000))
 		return 0, 0, fmt.Errorf("FaceSwap вернул код %d: %s", resp.StatusCode, string(body))
@@ -272,33 +258,6 @@ func requestFaceSwap(ctx context.Context, endpoint, sourcePath, targetPath, targ
 		duration,
 	)
 	return duration, workers, nil
-}
-
-func writeFaceSwapMultipart(writer *multipart.Writer, sourcePath, targetPath, targetField string) error {
-	for _, file := range []struct {
-		field string
-		path  string
-	}{
-		{field: "source_image", path: sourcePath},
-		{field: targetField, path: targetPath},
-	} {
-		input, err := os.Open(file.path)
-		if err != nil {
-			return err
-		}
-		part, err := writer.CreateFormFile(file.field, filepath.Base(file.path))
-		if err == nil {
-			_, err = io.Copy(part, input)
-		}
-		closeErr := input.Close()
-		if err != nil {
-			return err
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-	}
-	return nil
 }
 
 func positiveHeaderInt(header http.Header, name string, fallback int) int {
