@@ -28,7 +28,7 @@ if [[ ! -f "$project_dir/.env" ]]; then
 fi
 
 ssh "${ssh_options[@]}" "$remote_host" mkdir -p -- "$remote_target"
-rsync -az --delete --info=stats1 \
+rsync -az --delete --stats \
   -e "ssh -o BatchMode=yes -o ConnectTimeout=15" \
   --exclude=.git \
   --exclude=.env \
