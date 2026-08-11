@@ -1,583 +1,579 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"log"
 	"os"
-	"path/filepath"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
+	"unicode/utf8"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
-// Version info set at build time
 var (
 	GitCommit  = "unknown"
 	GitMessage = "unknown"
 )
 
-// Handle /compress command - compress JPG (FREE for users with positive balance)
-func handleCompressImage(bot *tgbotapi.BotAPI, chatID int64, userID string, fileID string, quality int) {
-	// Check user has positive balance (feature is free but requires account with coins)
-	userData, err := getUserInfo(int(chatID))
+var (
+	userSessions    = newSessionStore(sessionTTL)
+	compressionSlot = make(chan struct{}, 2)
+)
+
+func handleCompressImage(bot *tgbotapi.BotAPI, chatID, tgUserID int64, userID, fileID string, quality int) {
+	user, err := getUserInfo(tgUserID)
 	if err != nil {
-		log.Printf("Ошибка получения данных пользователя: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка при проверке баланса.")
-		bot.Send(msg)
+		log.Printf("Ошибка проверки баланса пользователя %d: %v", chatID, err)
+		sendText(bot, chatID, "Ошибка при проверке баланса.")
+		return
+	}
+	if user.Coins <= 0 {
+		sendText(bot, chatID, "Функция сжатия доступна только пользователям с положительным балансом.")
 		return
 	}
 
-	coins := int(userData["coins"].(float64))
-	if coins <= 0 {
-		msg := tgbotapi.NewMessage(chatID, "Функция сжатия доступна только пользователям с положительным балансом.")
-		bot.Send(msg)
-		return
-	}
-
-	// Get file path from Telegram
 	inputPath, err := getTelegramFile(bot, fileID)
 	if err != nil {
-		log.Printf("Ошибка получения файла: %v", err)
-		msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("Ошибка получения изображения: %v", err))
-		bot.Send(msg)
+		log.Printf("Ошибка получения изображения: %v", err)
+		sendText(bot, chatID, fmt.Sprintf("Ошибка получения изображения: %v", err))
 		return
 	}
+	defer removeDownloadedTelegramFile(inputPath)
 
-	// Create cache directory for output
-	cacheDir := "cache"
-	err = os.MkdirAll(cacheDir, os.ModePerm)
+	if err := os.MkdirAll(botCacheDirectory(), 0o755); err != nil {
+		log.Printf("Ошибка создания временной директории: %v", err)
+		sendText(bot, chatID, "Ошибка создания временной директории.")
+		return
+	}
+	outputFile, err := os.CreateTemp(botCacheDirectory(), "compress-*.jpg")
 	if err != nil {
-		log.Printf("Ошибка создания кэша: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка создания временной директории.")
-		bot.Send(msg)
+		log.Printf("Ошибка создания сжатого файла: %v", err)
+		sendText(bot, chatID, "Ошибка создания сжатого файла.")
 		return
 	}
-
-	outputPath := filepath.Join(cacheDir, fmt.Sprintf("compress_output_%s.jpg", fileID))
+	outputPath := outputFile.Name()
 	defer os.Remove(outputPath)
 
-	// Open and decode image
-	imgFile, err := os.Open(inputPath)
+	inputFile, err := os.Open(inputPath)
 	if err != nil {
-		log.Printf("Ошибка открытия файла: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка открытия изображения.")
-		bot.Send(msg)
+		_ = outputFile.Close()
+		log.Printf("Ошибка открытия изображения: %v", err)
+		sendText(bot, chatID, "Ошибка открытия изображения.")
 		return
 	}
-	defer imgFile.Close()
-
-	img, _, err := image.Decode(imgFile)
-	if err != nil {
-		log.Printf("Ошибка декодирования изображения: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка чтения изображения. Убедитесь, что это JPG файл.")
-		bot.Send(msg)
+	img, _, decodeErr := image.Decode(inputFile)
+	closeErr := inputFile.Close()
+	if decodeErr != nil {
+		_ = outputFile.Close()
+		log.Printf("Ошибка декодирования изображения: %v", decodeErr)
+		sendText(bot, chatID, "Ошибка чтения изображения. Убедитесь, что это JPG или PNG файл.")
 		return
 	}
-
-	// Create output file
-	outputFile, err := os.Create(outputPath)
-	if err != nil {
-		log.Printf("Ошибка создания выходного файла: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка создания сжатого файла.")
-		bot.Send(msg)
-		return
-	}
-	defer outputFile.Close()
-
-	// Encode with specified quality
-	options := &jpeg.Options{Quality: quality}
-	err = jpeg.Encode(outputFile, img, options)
-	if err != nil {
-		log.Printf("Ошибка кодирования изображения: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка сжатия изображения.")
-		bot.Send(msg)
+	if closeErr != nil {
+		_ = outputFile.Close()
+		log.Printf("Ошибка закрытия изображения: %v", closeErr)
 		return
 	}
 
-	// Send compressed image back
+	if err := jpeg.Encode(outputFile, img, &jpeg.Options{Quality: quality}); err != nil {
+		_ = outputFile.Close()
+		log.Printf("Ошибка сжатия изображения: %v", err)
+		sendText(bot, chatID, "Ошибка сжатия изображения.")
+		return
+	}
+	if err := outputFile.Close(); err != nil {
+		log.Printf("Ошибка закрытия сжатого файла: %v", err)
+		sendText(bot, chatID, "Ошибка подготовки сжатого изображения.")
+		return
+	}
+
 	photo := tgbotapi.NewPhoto(chatID, tgbotapi.FilePath(outputPath))
 	photo.Caption = fmt.Sprintf("Изображение сжато до %d%% качества.", quality)
-	_, err = bot.Send(photo)
-	if err != nil {
+	if _, err := bot.Send(photo); err != nil {
 		log.Printf("Ошибка отправки сжатого изображения: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Ошибка отправки сжатого изображения.")
-		bot.Send(msg)
+		sendText(bot, chatID, "Ошибка отправки сжатого изображения.")
 		return
 	}
-
 	log.Printf("Изображение успешно сжато для пользователя %s", userID)
 }
 
-// Handle /status command
-func handleStatusCommand(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
-	tgUserID := int(update.Message.From.ID)
-	tgChatID := update.Message.Chat.ID
-
-	userData, err := getUserInfo(tgUserID)
+func handleStatusCommand(bot *tgbotapi.BotAPI, message *tgbotapi.Message) error {
+	user, err := getUserInfo(message.From.ID)
 	if err != nil {
-		return fmt.Errorf("ошибка при получении данных о пользователе: %v", err)
+		return fmt.Errorf("ошибка получения пользователя: %v", err)
+	}
+	circleJobs, err := getActiveJobs(user.ID, "circle_jobs")
+	if err != nil {
+		return fmt.Errorf("ошибка получения задач создания кружков: %v", err)
+	}
+	faceJobs, err := getActiveJobs(user.ID, "face_jobs")
+	if err != nil {
+		return fmt.Errorf("ошибка получения задач замены лиц: %v", err)
 	}
 
-	response := fmt.Sprintf(
-		"📊 Статус пользователя:\n"+
-			"👤 Имя пользователя: %s\n"+
-			"🔑 Telegram ID: %d\n"+
-			"💰 Монеты: %d\n"+
-			"🌀 Кружков создано: %d\n"+
-			"💼 Замены лиц: %d\n\n",
-		userData["username"],
-		tgUserID,
-		int(userData["coins"].(float64)),
-		int(userData["circle_count"].(float64)),
-		int(userData["face_replace_count"].(float64)),
-	)
-
-	// Получаем активные задачи создания кружков
-	activeCircleJobs, err := getActiveJobs(userData["id"].(string), "circle_jobs")
-	if err != nil {
-		return fmt.Errorf("ошибка при получении активных задач создания кружков: %v", err)
-	}
-	if len(activeCircleJobs) > 0 {
-		response += "📋 Активные задачи создания кружков:\n"
-		for _, job := range activeCircleJobs {
-			// Пропускаем задачи со статусом "err cleared"
-			if status, ok := job["status"].(string); ok && strings.Contains(status, "err cleared") {
-				continue
-			}
-			response += fmt.Sprintf(
-				"🔹 Задача ID: %s\n"+
-					"   Статус: %s\n"+
-					"   Время: %s\n"+
-					"   Обновлена: %s\n\n",
-				job["id"],
-				job["status"],
-				job["created"],
-				job["updated"],
+	chunks := splitTelegramMessage(formatStatus(user, circleJobs, faceJobs), 3500)
+	for index, chunk := range chunks {
+		msg := tgbotapi.NewMessage(message.Chat.ID, chunk)
+		if index == len(chunks)-1 {
+			msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+				tgbotapi.NewInlineKeyboardRow(
+					tgbotapi.NewInlineKeyboardButtonData("Сбросить ошибки", "reset_errors"),
+				),
 			)
 		}
-	} else {
-		response += "У вас нет активных задач создания кружков.\n\n"
-	}
-
-	// Получаем активные задачи замены лиц
-	activeFaceJobs, err := getActiveJobs(userData["id"].(string), "face_jobs")
-	if err != nil {
-		return fmt.Errorf("ошибка при получении активных задач замены лиц: %v", err)
-	}
-	if len(activeFaceJobs) > 0 {
-		response += "📋 Активные задачи замены лиц:\n"
-		for _, job := range activeFaceJobs {
-			// Skip tasks with "err cleared" status
-			if status, ok := job["status"].(string); ok && strings.Contains(status, "err cleared") {
-				continue
-			}
-
-			// Build response text, including duration and price if available
-			responseText := fmt.Sprintf(
-				"🔹 Задача ID: %s\n"+
-					"   Статус: %s\n"+
-					"   Время: %s\n"+
-					"   Обновлена: %s\n",
-				job["id"],
-				job["status"],
-				job["created"],
-				job["updated"],
-			)
-
-			// Add duration and price if available (for completed jobs)
-			if duration, ok := job["duration"].(float64); ok && duration > 0 {
-				responseText += fmt.Sprintf("   Длительность: %d сек\n", int(duration))
-			}
-			if price, ok := job["price"].(float64); ok && price > 0 {
-				responseText += fmt.Sprintf("   Цена: %d монет\n", int(price))
-			}
-
-			response += responseText + "\n"
+		if _, err := bot.Send(msg); err != nil {
+			return fmt.Errorf("ошибка отправки статуса: %v", err)
 		}
-	} else {
-		response += "У вас нет активных задач замены лиц.\n"
 	}
-
-	// Создаем сообщение с кнопкой
-	msg := tgbotapi.NewMessage(tgChatID, response)
-
-	// Добавляем кнопку сброса ошибок
-	keyboard := tgbotapi.NewInlineKeyboardMarkup(
-		tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("Сбросить ошибки", "reset_errors"),
-		),
-	)
-	msg.ReplyMarkup = keyboard
-
-	bot.Send(msg)
 	return nil
 }
 
-// Обработка нажатия на кнопку сброса ошибок
-func handleResetErrors(bot *tgbotapi.BotAPI, update tgbotapi.Update) error {
-	tgUserID := int(update.CallbackQuery.From.ID)
-	tgChatID := update.CallbackQuery.Message.Chat.ID
+func formatStatus(user UserRecord, circleJobs, faceJobs []JobRecord) string {
+	var response strings.Builder
+	fmt.Fprintf(
+		&response,
+		"📊 Статус пользователя:\n👤 Имя пользователя: %s\n🔑 Telegram ID: %d\n💰 Монеты: %d\n🌀 Кружков создано: %d\n💼 Замены лиц: %d\n\n",
+		user.Username,
+		user.TGID,
+		user.Coins,
+		user.CircleCount,
+		user.FaceReplaceCount,
+	)
+	appendJobs(&response, "📋 Активные задачи создания кружков:", "У вас нет активных задач создания кружков.", circleJobs)
+	response.WriteString("\n")
+	appendJobs(&response, "📋 Активные задачи замены лиц:", "У вас нет активных задач замены лиц.", faceJobs)
+	return response.String()
+}
 
-	userData, err := getUserInfo(tgUserID)
-	if err != nil {
-		return fmt.Errorf("ошибка при получении данных о пользователе: %v", err)
+func appendJobs(response *strings.Builder, title, emptyMessage string, jobs []JobRecord) {
+	visible := make([]JobRecord, 0, len(jobs))
+	for _, job := range jobs {
+		if !strings.HasPrefix(job.Status, "err cleared:") {
+			visible = append(visible, job)
+		}
 	}
-
-	// Получаем все задачи пользователя
-	faceJobs, err := getActiveJobs(userData["id"].(string), "face_jobs")
-	if err != nil {
-		return fmt.Errorf("ошибка при получении задач замены лиц: %v", err)
+	if len(visible) == 0 {
+		response.WriteString(emptyMessage + "\n")
+		return
 	}
-
-	circleJobs, err := getActiveJobs(userData["id"].(string), "circle_jobs")
-	if err != nil {
-		return fmt.Errorf("ошибка при получении задач создания кружков: %v", err)
+	response.WriteString(title + "\n")
+	for _, job := range visible {
+		fmt.Fprintf(
+			response,
+			"🔹 Задача ID: %s\n   Статус: %s\n   Время: %s\n   Обновлена: %s\n",
+			job.ID,
+			job.Status,
+			job.Created,
+			job.Updated,
+		)
+		if job.Duration > 0 {
+			fmt.Fprintf(response, "   Длительность: %d сек\n", job.Duration)
+		}
+		if job.Price > 0 {
+			fmt.Fprintf(response, "   Цена: %d монет\n", job.Price)
+		}
+		response.WriteString("\n")
 	}
+}
 
-	// Сбрасываем статусы ошибок
-	for _, job := range faceJobs {
-		if status, ok := job["status"].(string); ok && strings.HasPrefix(status, "error") {
-			newStatus := fmt.Sprintf("err cleared: %s", strings.TrimPrefix(status, "error"))
-			err = updateStatus("face_jobs", job["id"].(string), newStatus)
-			if err != nil {
-				log.Printf("Ошибка обновления статуса задачи %s: %v", job["id"], err)
+func splitTelegramMessage(message string, limit int) []string {
+	if utf8.RuneCountInString(message) <= limit {
+		return []string{message}
+	}
+	var chunks []string
+	var current strings.Builder
+	for _, line := range strings.SplitAfter(message, "\n") {
+		if utf8.RuneCountInString(current.String())+utf8.RuneCountInString(line) > limit && current.Len() > 0 {
+			chunks = append(chunks, current.String())
+			current.Reset()
+		}
+		for utf8.RuneCountInString(line) > limit {
+			runes := []rune(line)
+			chunks = append(chunks, string(runes[:limit]))
+			line = string(runes[limit:])
+		}
+		current.WriteString(line)
+	}
+	if current.Len() > 0 {
+		chunks = append(chunks, current.String())
+	}
+	return chunks
+}
+
+func handleResetErrors(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQuery) error {
+	user, err := getUserInfo(query.From.ID)
+	if err != nil {
+		return fmt.Errorf("ошибка получения пользователя: %v", err)
+	}
+	for _, collection := range []string{"face_jobs", "circle_jobs"} {
+		jobs, err := getActiveJobs(user.ID, collection)
+		if err != nil {
+			return fmt.Errorf("ошибка получения задач из %s: %v", collection, err)
+		}
+		for _, job := range jobs {
+			if !strings.HasPrefix(job.Status, "error:") {
+				continue
+			}
+			status := "err cleared: " + strings.TrimSpace(strings.TrimPrefix(job.Status, "error:"))
+			if err := updateStatus(collection, job.ID, status); err != nil {
+				log.Printf("Ошибка сброса статуса задачи %s: %v", job.ID, err)
 			}
 		}
 	}
-
-	for _, job := range circleJobs {
-		if status, ok := job["status"].(string); ok && strings.HasPrefix(status, "error:") {
-			newStatus := fmt.Sprintf("err cleared: %s", strings.TrimPrefix(status, "error:"))
-			err = updateStatus("circle_jobs", job["id"].(string), newStatus)
-			if err != nil {
-				log.Printf("Ошибка обновления статуса задачи %s: %v", job["id"], err)
-			}
-		}
+	if query.Message != nil {
+		sendText(bot, query.Message.Chat.ID, "Статусы ошибок сброшены. Используйте /status для проверки.")
 	}
-
-	// Отправляем подтверждение
-	msg := tgbotapi.NewMessage(tgChatID, "Статусы ошибок сброшены. Используйте /status для проверки.")
-	bot.Send(msg)
-
 	return nil
 }
 
-type UserSession struct {
-	FaceFileID         string // временное хранение ID файла фотографии
-	WaitingForCompress bool   // ожидание фото для сжатия
-	CompressQuality    int    // качество сжатия JPEG (1-100)
-}
-
-// Function to get or create user session
-func getUserSession(userID int) *UserSession {
-	if session, ok := userSessions[userID]; ok {
-		return session
+func parseCommand(text string) (string, []string, bool) {
+	parts := strings.Fields(strings.TrimSpace(text))
+	if len(parts) == 0 || !strings.HasPrefix(parts[0], "/") {
+		return "", nil, false
 	}
-	// Создаем новую сессию, если её еще нет
-	userSessions[userID] = &UserSession{}
-	return userSessions[userID]
+	command := strings.TrimPrefix(strings.ToLower(parts[0]), "/")
+	if at := strings.IndexByte(command, '@'); at >= 0 {
+		command = command[:at]
+	}
+	if command == "" {
+		return "", nil, false
+	}
+	return command, parts[1:], true
 }
 
-// Хранилище сессий пользователей
-var userSessions = make(map[int]*UserSession)
+func handleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
+	if update.CallbackQuery != nil {
+		handleCallback(bot, update.CallbackQuery)
+		return
+	}
+	message := update.Message
+	if message == nil || message.From == nil {
+		return
+	}
 
-func initializeBot(BOT_TOKEN, BOT_ENDPOINT string) (*tgbotapi.BotAPI, error) {
-	var bot *tgbotapi.BotAPI
+	userID := message.From.ID
+	username := message.From.UserName
+	pbUserID, err := getOrCreateUser(userID, username)
+	if err != nil {
+		log.Printf("Ошибка получения пользователя %d: %v", userID, err)
+		sendText(bot, message.Chat.ID, "Не удалось загрузить профиль. Попробуйте позже.")
+		return
+	}
+
+	if command, args, ok := parseCommand(message.Text); ok {
+		switch command {
+		case "start":
+			handleStart(bot, message)
+		case "help":
+			handleHelp(bot, message.Chat.ID)
+		case "status":
+			if err := handleStatusCommand(bot, message); err != nil {
+				log.Printf("Не удалось получить статус пользователя: %v", err)
+				sendText(bot, message.Chat.ID, "Произошла ошибка при получении статуса. Попробуйте позже.")
+			}
+		case "compress":
+			handleCompressCommand(bot, message, args)
+		case "cancel":
+			cancelSession(bot, message.Chat.ID, userID, pbUserID)
+		}
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(message.Text), "Отменить") {
+		cancelSession(bot, message.Chat.ID, userID, pbUserID)
+		return
+	}
+
+	requestKey := fmt.Sprintf("telegram:%d", update.UpdateID)
+	if (len(message.Photo) > 0 || message.Video != nil) && !userSessions.Get(userID).WaitingForCompress {
+		if existingID := findExistingJobByRequestKey(requestKey); existingID != "" {
+			userSessions.Reset(userID)
+			sendText(bot, message.Chat.ID, fmt.Sprintf("Эта задача уже поставлена в очередь. ID: %s.", existingID))
+			return
+		}
+	}
+
+	session := userSessions.Get(userID)
+	if session.FaceFileID == "" && !session.WaitingForCompress {
+		pendingFace, err := getPendingFace(pbUserID)
+		if err != nil {
+			log.Printf("Не удалось восстановить сессию пользователя %d: %v", userID, err)
+		} else if pendingFace != "" {
+			userSessions.SetFace(userID, pendingFace)
+			session = userSessions.Get(userID)
+		}
+	}
+	if len(message.Photo) > 0 {
+		handlePhoto(bot, message, pbUserID, session, requestKey)
+		return
+	}
+	if message.Video != nil {
+		handleVideo(bot, message, pbUserID, session, requestKey)
+	}
+}
+
+func handleCallback(bot *tgbotapi.BotAPI, query *tgbotapi.CallbackQuery) {
+	if _, err := bot.Request(tgbotapi.NewCallback(query.ID, "")); err != nil {
+		log.Printf("Не удалось подтвердить callback: %v", err)
+	}
+	if query.Data != "reset_errors" {
+		return
+	}
+	if err := handleResetErrors(bot, query); err != nil {
+		log.Printf("Ошибка при сбросе ошибок: %v", err)
+		if query.Message != nil {
+			sendText(bot, query.Message.Chat.ID, "Произошла ошибка при сбросе статусов. Попробуйте позже.")
+		}
+	}
+}
+
+func handleStart(bot *tgbotapi.BotAPI, message *tgbotapi.Message) {
+	name := message.From.UserName
+	if name == "" {
+		name = message.From.FirstName
+	}
+	greeting := fmt.Sprintf(
+		"👋 Привет, %s! Добро пожаловать в бот для создания кружков и замены лиц!\n\n"+
+			"🎯 Что я умею:\n"+
+			"• Создавать кружки из видео (1 монета)\n"+
+			"• Сжимать фото по команде /compress (бесплатно)\n"+
+			"• Заменять лица на фото (1 монета)\n"+
+			"• Заменять лица на видео (2+ монет)\n\n"+
+			"📚 Подробнее о командах: /help\n"+
+			"📊 Проверить статус: /status\n"+
+			"📢 Новости: https://t.me/+HGQVwMhFzIExZDNi",
+		name,
+	)
+	sendText(bot, message.Chat.ID, greeting)
+}
+
+func handleHelp(bot *tgbotapi.BotAPI, chatID int64) {
+	helpMessage := "📚 Список доступных команд:\n\n" +
+		"🎥 Создание кружка (1 монета):\n• Отправьте видео\n• Дождитесь обработки\n\n" +
+		"👤 Замена лица на фото (1 монета):\n• Отправьте фото лица\n• Отправьте второе фото\n• Дождитесь обработки\n\n" +
+		"🎬 Замена лица на видео (2+ монет):\n• Отправьте фото лица\n• Отправьте видео\n• Дождитесь обработки\n\n" +
+		"🗜 /compress [качество] — сжать фото в JPEG (бесплатно):\n" +
+		"• Введите команду с нужным качеством\n• Отправляйте фото для сжатия (можно несколько)\n" +
+		"• Нажмите «Отменить» или /cancel для выхода\n• Примеры: /compress или /compress 80\n" +
+		"• Качество: 1–100 (по умолчанию 12)\n• Требуется положительный баланс монет\n\n" +
+		"📊 /status — проверить статус и баланс\n❓ /help — показать это сообщение\n\n" +
+		"📢 Новости и обновления: https://t.me/+HGQVwMhFzIExZDNi"
+	sendText(bot, chatID, helpMessage)
+}
+
+func handleCompressCommand(bot *tgbotapi.BotAPI, message *tgbotapi.Message, args []string) {
+	quality := 12
+	if len(args) > 1 {
+		sendText(bot, message.Chat.ID, "Неверный формат. Пример: /compress 80")
+		return
+	}
+	if len(args) == 1 {
+		parsed, err := strconv.Atoi(args[0])
+		if err != nil || parsed < 1 || parsed > 100 {
+			sendText(bot, message.Chat.ID, "Неверное значение качества. Используйте число от 1 до 100.\nПример: /compress 80")
+			return
+		}
+		quality = parsed
+	}
+	userSessions.StartCompression(message.From.ID, quality)
+	msg := tgbotapi.NewMessage(
+		message.Chat.ID,
+		fmt.Sprintf("Отправляйте изображения для сжатия до %d%% качества.\nНажмите «Отменить» или /cancel, когда закончите.", quality),
+	)
+	msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton("Отменить")),
+	)
+	sendConfig(bot, msg)
+}
+
+func handlePhoto(bot *tgbotapi.BotAPI, message *tgbotapi.Message, pbUserID string, session UserSession, requestKey string) {
+	fileID := message.Photo[len(message.Photo)-1].FileID
+	if session.WaitingForCompress {
+		select {
+		case compressionSlot <- struct{}{}:
+			sendText(bot, message.Chat.ID, "Обрабатываю...")
+			go func(quality int) {
+				defer func() { <-compressionSlot }()
+				handleCompressImage(bot, message.Chat.ID, message.From.ID, pbUserID, fileID, quality)
+			}(session.CompressQuality)
+		default:
+			sendText(bot, message.Chat.ID, "Сейчас уже обрабатываются другие изображения. Попробуйте через несколько секунд.")
+		}
+		return
+	}
+
+	if session.FaceFileID == "" {
+		if err := savePendingFace(pbUserID, fileID); err != nil {
+			log.Printf("Не удалось сохранить фотографию лица: %v", err)
+			sendText(bot, message.Chat.ID, "Не удалось сохранить фотографию. Попробуйте ещё раз.")
+			return
+		}
+		userSessions.SetFace(message.From.ID, fileID)
+		sendTextWithCancelKeyboard(bot, message.Chat.ID, "Получена фотография. Пожалуйста, отправьте видео или второе фото для замены лица.")
+		return
+	}
+
+	sendText(bot, message.Chat.ID, "Ловлю!")
+	jobID, err := createFaceJob(bot, pbUserID, fileID, session.FaceFileID, requestKey)
+	if err != nil {
+		log.Printf("Не удалось создать задачу замены лица: %v", err)
+		sendText(bot, message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
+		return
+	}
+	userSessions.Reset(message.From.ID)
+	if err := clearPendingFace(pbUserID); err != nil {
+		log.Printf("Не удалось очистить сессию после создания задачи %s: %v", jobID, err)
+	}
+	sendText(bot, message.Chat.ID, fmt.Sprintf("Ваше фото поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
+}
+
+func handleVideo(bot *tgbotapi.BotAPI, message *tgbotapi.Message, pbUserID string, session UserSession, requestKey string) {
+	sendText(bot, message.Chat.ID, "Ловлю!")
+	var jobID string
 	var err error
-	for retries := 0; retries < 5; retries++ {
-		// auth pocketbase
-		err = authenticatePocketBase()
-		if err != nil {
-			log.Printf("Ошибка авторизации PocketBase (попытка %d/5): %v", retries+1, err)
-			time.Sleep(time.Duration(retries+1) * 5 * time.Second)
-			continue
+	if session.FaceFileID != "" {
+		jobID, err = createFaceJob(bot, pbUserID, message.Video.FileID, session.FaceFileID, requestKey)
+	} else {
+		jobID, err = createCircleJob(bot, pbUserID, message.Video.FileID, requestKey)
+	}
+	if err != nil {
+		log.Printf("Не удалось создать задачу по видео: %v", err)
+		sendText(bot, message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
+		return
+	}
+	userSessions.Reset(message.From.ID)
+	if err := clearPendingFace(pbUserID); err != nil {
+		log.Printf("Не удалось очистить сессию после создания задачи %s: %v", jobID, err)
+	}
+	sendText(bot, message.Chat.ID, fmt.Sprintf("Ваше видео поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
+}
+
+func cancelSession(bot *tgbotapi.BotAPI, chatID, userID int64, pbUserID string) {
+	userSessions.Reset(userID)
+	if err := clearPendingFace(pbUserID); err != nil {
+		log.Printf("Не удалось очистить сессию пользователя %d: %v", userID, err)
+	}
+	msg := tgbotapi.NewMessage(chatID, "Операция отменена.")
+	msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
+	sendConfig(bot, msg)
+}
+
+func sendTextWithCancelKeyboard(bot *tgbotapi.BotAPI, chatID int64, text string) {
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ReplyMarkup = tgbotapi.NewReplyKeyboard(
+		tgbotapi.NewKeyboardButtonRow(tgbotapi.NewKeyboardButton("Отменить")),
+	)
+	sendConfig(bot, msg)
+}
+
+func sendText(bot *tgbotapi.BotAPI, chatID int64, text string) {
+	sendConfig(bot, tgbotapi.NewMessage(chatID, text))
+}
+
+func sendConfig(bot *tgbotapi.BotAPI, config tgbotapi.Chattable) {
+	if _, err := bot.Send(config); err != nil {
+		log.Printf("Ошибка отправки сообщения в Telegram: %v", err)
+	}
+}
+
+func initializeBot(ctx context.Context, token, endpoint string) (*tgbotapi.BotAPI, error) {
+	for attempt := 1; ; attempt++ {
+		if err := authenticatePocketBase(); err != nil {
+			log.Printf("Ошибка авторизации PocketBase (попытка %d): %v", attempt, err)
+		} else {
+			bot, err := tgbotapi.NewBotAPIWithClient(token, endpoint+"/bot%s/%s", botHTTPClient)
+			if err == nil {
+				log.Printf("Авторизация Telegram выполнена для @%s", bot.Self.UserName)
+				return bot, nil
+			}
+			log.Printf("Ошибка авторизации Telegram (попытка %d): %v", attempt, err)
 		}
 
-		// start the bot
-		bot, err = tgbotapi.NewBotAPIWithAPIEndpoint(BOT_TOKEN, BOT_ENDPOINT+`/bot%s/%s`)
+		delay := time.Duration(attempt) * 3 * time.Second
+		if delay > 30*time.Second {
+			delay = 30 * time.Second
+		}
+		if !waitContext(ctx, delay) {
+			return nil, ctx.Err()
+		}
+	}
+}
+
+func pollUpdates(ctx context.Context, bot *tgbotapi.BotAPI) {
+	config := tgbotapi.NewUpdate(0)
+	config.Timeout = 60
+	backoff := time.Second
+	for ctx.Err() == nil {
+		updates, err := bot.GetUpdatesWithContext(ctx, config)
 		if err != nil {
-			log.Printf("Ошибка инициализации бота (попытка %d/5): %v", retries+1, err)
-			time.Sleep(time.Duration(retries+1) * 5 * time.Second)
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("Ошибка получения обновлений Telegram: %v", err)
+			if !waitContext(ctx, backoff) {
+				return
+			}
+			if backoff < 30*time.Second {
+				backoff *= 2
+			}
 			continue
 		}
-		log.Printf("Authorized on account %s", bot.Self.UserName)
-		return bot, nil
+		backoff = time.Second
+		for _, update := range updates {
+			if update.UpdateID >= config.Offset {
+				config.Offset = update.UpdateID + 1
+			}
+			func() {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						log.Printf("Паника при обработке update %d: %v", update.UpdateID, recovered)
+					}
+				}()
+				handleUpdate(bot, update)
+			}()
+		}
 	}
-	return nil, fmt.Errorf("не удалось инициализировать после 5 попыток: %v", err)
+}
+
+func waitContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func main() {
-	// Log version information
 	commitShort := GitCommit
 	if len(GitCommit) > 8 {
 		commitShort = GitCommit[:8]
 	}
-	log.Printf("🤖 Telegram Bot started")
-	log.Printf("📦 Version: %s - %s", commitShort, GitMessage)
+	log.Println("🤖 Telegram Bot запущен")
+	log.Printf("📦 Версия: %s — %s", commitShort, GitMessage)
 
-	// load variables
-	BOT_TOKEN, BOT_DEBUG, BOT_ENDPOINT := LoadEnvironment()
+	token, debug, endpoint := LoadEnvironment()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 
-	// Initialize bot
-	bot, err := initializeBot(BOT_TOKEN, BOT_ENDPOINT)
+	bot, err := initializeBot(ctx, token, endpoint)
 	if err != nil {
-		log.Fatalf("Bot initialization failed: %v", err)
+		log.Printf("Инициализация бота прервана: %v", err)
+		return
+	}
+	bot.Debug = debug
+	if debug {
+		log.Println("Бот работает в режиме DEBUG")
 	}
 
-	if BOT_DEBUG {
-		bot.Debug = true
-		log.Print("bot in DEBUG mode")
-	}
-
-	// Clean up any leftover user sessions on restart
-	userSessions = make(map[int]*UserSession)
-	log.Println("User sessions cleared on restart")
-
-	// updates on telegram API with recovery
-	for {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("Bot panic recovered: %v", r)
-				}
-			}()
-
-			u := tgbotapi.NewUpdate(0)
-			u.Timeout = 60
-
-			// Основной обработчик
-			updates := bot.GetUpdatesChan(u)
-			for update := range updates {
-				// Обработка нажатия на кнопку
-				if update.CallbackQuery != nil {
-					if update.CallbackQuery.Data == "reset_errors" {
-						err = handleResetErrors(bot, update)
-						if err != nil {
-							log.Printf("Ошибка при сбросе ошибок: %v", err)
-							msg := tgbotapi.NewMessage(update.CallbackQuery.Message.Chat.ID, "Произошла ошибка при сбросе статусов. Попробуйте позже.")
-							bot.Send(msg)
-						}
-						continue
-					}
-				}
-
-				if update.Message == nil {
-					continue
-				}
-
-				userID := update.Message.From.ID
-				userName := update.Message.From.UserName
-
-				pbUserID, err := getOrCreateUser(int(userID), userName)
-				if err != nil {
-					log.Printf("Ошибка при получении/создании пользователя: %v", err)
-					continue
-				}
-
-				// Get session for current user
-				session := getUserSession(int(userID))
-
-				// Приветственное сообщение
-				if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "start") {
-					greeting := fmt.Sprintf(
-						"👋 Привет, %s! Добро пожаловать в бот для создания кружков и замены лиц!\n\n"+
-							"🎯 Что я умею:\n"+
-							"• Создавать кружки из видео (1 монета)\n"+
-							"• Сжимать фото по команде /compress (бесплатно)\n"+
-							"• Заменять лица на фото (1 монета)\n"+
-							"• Заменять лица на видео (2+ монет)\n\n"+
-							"📚 Подробнее о командах: /help\n"+
-							"📊 Проверить статус: /status\n"+
-							"📢 Новости: https://t.me/+HGQVwMhFzIExZDNi",
-						userName)
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, greeting)
-					bot.Send(msg)
-					continue
-				}
-
-				// help
-				if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "help") {
-					helpMessage := "📚 Список доступных команд:\n\n" +
-						"🎥 Создание кружка (1 монета):\n" +
-						"• Отправьте видео\n" +
-						"• Дождитесь обработки\n\n" +
-						"👤 Замена лица на фото (1 монета):\n" +
-						"• Отправьте фото лица\n" +
-						"• Отправьте второе фото\n" +
-						"• Дождитесь обработки\n\n" +
-						"🎬 Замена лица на видео (2+ монет):\n" +
-						"• Отправьте фото лица\n" +
-						"• Отправьте видео\n" +
-						"• Дождитесь обработки\n\n" +
-						"🗜 /compress [качество] - сжать фото в JPEG (бесплатно):\n" +
-						"• Введите команду с нужным качеством\n" +
-						"• Отправляйте фото для сжатия (можно несколько)\n" +
-						"• Нажмите 'Отменить' или /cancel для выхода\n" +
-						"• Примеры: /compress или /compress 80\n" +
-						"• Качество: 1-100 (по умолчанию 12)\n" +
-						"• Требуется положительный баланс монет\n\n" +
-						"📊 /status - проверить статус и баланс\n" +
-						"❓ /help - показать это сообщение\n\n" +
-						"📢 Новости и обновления: https://t.me/+HGQVwMhFzIExZDNi"
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, helpMessage)
-					bot.Send(msg)
-					continue
-				}
-
-				// status
-				if update.Message.Text != "" && strings.Contains(strings.ToLower(update.Message.Text), "status") {
-					err = handleStatusCommand(bot, update)
-					if err != nil {
-						log.Printf("Не удалось получить статус пользователя: %v", err)
-						msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Произошла ошибка при получении статуса: %v", err))
-						bot.Send(msg)
-						continue
-					}
-					continue
-				}
-
-				// compress command
-				if update.Message.Text != "" && strings.HasPrefix(strings.ToLower(update.Message.Text), "/compress") {
-					parts := strings.Fields(update.Message.Text)
-					quality := 12 // default quality
-
-					if len(parts) > 1 {
-						parsedQuality, err := strconv.Atoi(parts[1])
-						if err != nil || parsedQuality < 1 || parsedQuality > 100 {
-							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Неверное значение качества. Используйте число от 1 до 100.\nПример: /compress 80")
-							bot.Send(msg)
-							continue
-						}
-						quality = parsedQuality
-					}
-
-					session.WaitingForCompress = true
-					session.CompressQuality = quality
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Отправляйте изображения для сжатия до %d%% качества.\nНажмите \"Отменить\" или /cancel когда закончите.", quality))
-					cancelMarkup := tgbotapi.NewReplyKeyboard(
-						tgbotapi.NewKeyboardButtonRow(
-							tgbotapi.NewKeyboardButton("Отменить"),
-						),
-					)
-					msg.ReplyMarkup = cancelMarkup
-					bot.Send(msg)
-					continue
-				}
-
-				// Обработка получения фотографии
-				if update.Message.Photo != nil {
-					fileID := update.Message.Photo[len(update.Message.Photo)-1].FileID
-
-					// Проверяем режим ожидания сжатия
-					if session.WaitingForCompress {
-						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Обрабатываю...")
-						bot.Send(msg)
-
-						// Запускаем обработку в горутине
-						go handleCompressImage(bot, update.Message.Chat.ID, pbUserID, fileID, session.CompressQuality)
-
-						continue
-					}
-
-					// Проверяем, есть ли уже сохраненное фото в сессии
-					if session.FaceFileID != "" {
-						// Второе фото получено - создаем задачу замены лица на фото
-						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ловлю!")
-						bot.Send(msg)
-
-						jobID, err := createFaceJob(bot, pbUserID, fileID, session.FaceFileID)
-						if err != nil {
-							log.Printf("Не удалось создать задание на замену лица: %v", err)
-							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
-							bot.Send(msg)
-							continue
-						}
-
-						msg = tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше фото поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
-						bot.Send(msg)
-
-						// Сбрасываем данные сессии
-						session.FaceFileID = ""
-						continue
-					} else {
-						// Первое фото получено - сохраняем и просим второе фото или видео
-						session.FaceFileID = fileID
-
-						msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Получена фотография. Пожалуйста, отправьте видео или второе фото для замены лица.")
-						cancelMarkup := tgbotapi.NewReplyKeyboard(
-							tgbotapi.NewKeyboardButtonRow(
-								tgbotapi.NewKeyboardButton("Отменить"),
-							),
-						)
-						msg.ReplyMarkup = cancelMarkup
-						bot.Send(msg)
-						continue
-					}
-				}
-
-				// Обработка получения видео
-				if update.Message.Video != nil {
-					videoFileID := update.Message.Video.FileID
-
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Ловлю!")
-					bot.Send(msg)
-
-					// Проверяем, есть ли фото в сессии пользователя
-					if session.FaceFileID != "" {
-						jobID, err := createFaceJob(bot, pbUserID, videoFileID, session.FaceFileID)
-						if err != nil {
-							log.Printf("Не удалось создать задание на замену лица: %v", err)
-							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
-							bot.Send(msg)
-							continue
-						}
-
-						msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше видео поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
-						bot.Send(msg)
-
-						// Сбрасываем данные сессии
-						session.FaceFileID = ""
-						continue
-					} else {
-						jobID, err := createCircleJob(bot, pbUserID, videoFileID)
-						if err != nil {
-							log.Printf("Не удалось создать задание на создание кружочка: %v", err)
-							msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Произошла ошибка при создании задания. Если ситуация повторяется, обратитесь в поддержку.")
-							bot.Send(msg)
-							continue
-						}
-
-						msg := tgbotapi.NewMessage(update.Message.Chat.ID, fmt.Sprintf("Ваше видео поставлено в очередь для обработки. Статус: В очереди. ID: %s.", jobID))
-						bot.Send(msg)
-
-						// Сбрасываем временные данные
-						continue
-					}
-				}
-
-				// Обработка команды отмены
-				if update.Message.Text == "Отменить" || strings.HasPrefix(strings.ToLower(update.Message.Text), "/cancel") {
-					session.FaceFileID = ""
-					session.WaitingForCompress = false
-					msg := tgbotapi.NewMessage(update.Message.Chat.ID, "Операция отменена.")
-					msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
-					bot.Send(msg)
-					continue
-				}
-			}
-		}()
-		log.Println("Bot connection lost, attempting restart...")
-		time.Sleep(30 * time.Second)
-
-		// Reinitialize bot
-		bot, err = initializeBot(BOT_TOKEN, BOT_ENDPOINT)
-		if err != nil {
-			log.Printf("Ошибка перезапуска бота: %v", err)
-			time.Sleep(60 * time.Second)
-		}
-	}
+	pollUpdates(ctx, bot)
+	log.Println("Telegram Bot завершил работу")
 }

@@ -10,388 +10,489 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 )
 
-// getting JWT for pocketbase
+type UserRecord struct {
+	ID               string `json:"id"`
+	TGID             int64  `json:"tgid"`
+	Username         string `json:"username"`
+	Coins            int    `json:"coins"`
+	CircleCount      int    `json:"circle_count"`
+	FaceReplaceCount int    `json:"face_replace_count"`
+	PendingFaceFile  string `json:"pending_face_file_id"`
+	PendingFaceDate  string `json:"pending_face_updated"`
+}
+
+type JobRecord struct {
+	ID       string `json:"id"`
+	Status   string `json:"status"`
+	Created  string `json:"created"`
+	Updated  string `json:"updated"`
+	Duration int    `json:"duration"`
+	Price    int    `json:"price"`
+}
+
+type recordList[T any] struct {
+	Items []T `json:"items"`
+}
+
 func authenticatePocketBase() error {
-	authData := map[string]string{
+	payload, err := json.Marshal(map[string]string{
 		"identity": email,
 		"password": password,
-	}
-
-	authDataJson, err := json.Marshal(authData)
+	})
 	if err != nil {
 		return fmt.Errorf("ошибка сериализации данных авторизации: %v", err)
 	}
-
-	authURL := fmt.Sprintf("%s/api/admins/auth-with-password", pocketBaseUrl)
-
-	resp, err := http.Post(authURL, "application/json", bytes.NewBuffer(authDataJson))
+	resp, err := apiHTTPClient.Post(
+		pocketBaseUrl+"/api/admins/auth-with-password",
+		"application/json",
+		bytes.NewReader(payload),
+	)
 	if err != nil {
-		return fmt.Errorf("не удалось отправить запрос на авторизацию: %v", err)
+		return fmt.Errorf("ошибка запроса авторизации PocketBase: %v", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("ошибка чтения ответа при неудачной авторизации: %v", err)
-		}
-		return fmt.Errorf("авторизация не удалась, код %d, ответ: %s", resp.StatusCode, string(body))
-	}
-
-	// getting jwt
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("ошибка чтения тела ответа: %v", err)
+		return fmt.Errorf("ошибка чтения ответа авторизации: %v", err)
 	}
-	var authResponse map[string]interface{}
-	if err := json.Unmarshal(body, &authResponse); err != nil {
-		return fmt.Errorf("ошибка разбора ответа: %v, ответ: %s", err, string(body))
-	}
-
-	token, ok := authResponse["token"].(string)
-	if !ok || token == "" {
-		return fmt.Errorf("не удалось получить токен из ответа: %s", string(body))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("авторизация не удалась, код %d: %s", resp.StatusCode, limitedResponse(body))
 	}
 
-	authToken = token
-	log.Println("PocketBase: Авторизация прошла успешно. Получен токен от PocketBase.")
+	var response struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("ошибка разбора ответа авторизации: %v", err)
+	}
+	if response.Token == "" {
+		return fmt.Errorf("PocketBase не вернул токен")
+	}
+	setAuthToken(response.Token)
+	log.Println("PocketBase: авторизация прошла успешно")
 	return nil
 }
 
-func getOrCreateUser(tgUserID int, tgUsername string) (string, error) {
-	// Search in pocketbase
-	searchURL := fmt.Sprintf("%s/api/collections/users/records?filter=tgid=%d", pocketBaseUrl, tgUserID)
-	resp, err := sendAuthorizedRequest("GET", searchURL, nil)
+func getOrCreateUser(tgUserID int64, tgUsername string) (string, error) {
+	user, err := findUser(tgUserID)
 	if err != nil {
-		return "", fmt.Errorf("ошибка при отправке запроса на поиск пользователя: %v", err)
+		return "", err
 	}
-
-	var searchResult map[string]interface{}
-	if err := json.Unmarshal(resp, &searchResult); err != nil {
-		return "", fmt.Errorf("ошибка разбора ответа: %v, ответ: %s", err, string(resp))
-	}
-
-	// Check search results
-	if items, ok := searchResult["items"].([]interface{}); ok && len(items) > 0 {
-		if user, ok := items[0].(map[string]interface{}); ok {
-			if userID, ok := user["id"]; ok {
-				if idStr, ok := userID.(string); ok && idStr != "" {
-					// Пользователь найден, возвращаем его ID
-					return idStr, nil
-				}
+	if user != nil {
+		if user.Username != tgUsername {
+			if err := updateUsername(user.ID, tgUsername); err != nil {
+				log.Printf("Не удалось обновить username пользователя %d: %v", tgUserID, err)
 			}
 		}
+		return user.ID, nil
 	}
 
-	// New user creation
-	userData := map[string]interface{}{
-		"tgid":               tgUserID,
-		"username":           tgUsername,
-		"circle_count":       0,
-		"face_replace_count": 0,
-		"coins":              200,
-	}
-	userDataJson, err := json.Marshal(userData)
+	payload, err := json.Marshal(UserRecord{
+		TGID:             tgUserID,
+		Username:         tgUsername,
+		Coins:            200,
+		CircleCount:      0,
+		FaceReplaceCount: 0,
+	})
 	if err != nil {
-		return "", fmt.Errorf("ошибка сериализации данных пользователя: %v", err)
+		return "", fmt.Errorf("ошибка сериализации пользователя: %v", err)
 	}
-
-	createUserURL := fmt.Sprintf("%s/api/collections/users/records", pocketBaseUrl)
-	createResp, err := sendAuthorizedRequest("POST", createUserURL, userDataJson)
+	body, err := sendAuthorizedRequest(
+		http.MethodPost,
+		pocketBaseUrl+"/api/collections/users/records",
+		payload,
+	)
 	if err != nil {
-		return "", fmt.Errorf("ошибка при отправке запроса на создание пользователя: %v", err)
+		// Another bot instance may have created the same Telegram user.
+		if existing, findErr := findUser(tgUserID); findErr == nil && existing != nil {
+			return existing.ID, nil
+		}
+		return "", fmt.Errorf("ошибка создания пользователя: %v", err)
 	}
 
-	var createdUser map[string]interface{}
-	if err := json.Unmarshal(createResp, &createdUser); err != nil {
-		return "", fmt.Errorf("ошибка разбора ответа на создание пользователя: %v, ответ: %s", err, string(createResp))
+	var created UserRecord
+	if err := json.Unmarshal(body, &created); err != nil {
+		return "", fmt.Errorf("ошибка разбора созданного пользователя: %v", err)
 	}
-
-	// User creation recheck
-	if userID, ok := createdUser["id"].(string); ok && userID != "" {
-		return userID, nil
+	if created.ID == "" {
+		return "", fmt.Errorf("PocketBase не вернул ID созданного пользователя")
 	}
-
-	return "", fmt.Errorf("не удалось получить ID созданного пользователя из ответа: %s", string(createResp))
+	return created.ID, nil
 }
 
-// Face replacement job creation
-func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFileID string) (string, error) {
-	// file download
+func findUser(tgUserID int64) (*UserRecord, error) {
+	query := url.Values{}
+	query.Set("filter", fmt.Sprintf("tgid=%d", tgUserID))
+	query.Set("perPage", "1")
+	body, err := sendAuthorizedRequest(
+		http.MethodGet,
+		pocketBaseUrl+"/api/collections/users/records?"+query.Encode(),
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка поиска пользователя: %v", err)
+	}
+	var result recordList[UserRecord]
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("ошибка разбора пользователя: %v", err)
+	}
+	if len(result.Items) == 0 {
+		return nil, nil
+	}
+	return &result.Items[0], nil
+}
+
+func updateUsername(userID, username string) error {
+	payload, err := json.Marshal(map[string]string{"username": username})
+	if err != nil {
+		return err
+	}
+	_, err = sendAuthorizedRequest(
+		http.MethodPatch,
+		fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID),
+		payload,
+	)
+	return err
+}
+
+func getPendingFace(userID string) (string, error) {
+	body, err := sendAuthorizedRequest(
+		http.MethodGet,
+		fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID),
+		nil,
+	)
+	if err != nil {
+		return "", err
+	}
+	var user UserRecord
+	if err := json.Unmarshal(body, &user); err != nil {
+		return "", fmt.Errorf("ошибка разбора сессии пользователя: %v", err)
+	}
+	if user.PendingFaceFile == "" || user.PendingFaceDate == "" {
+		return "", nil
+	}
+	updated, err := parsePocketBaseTime(user.PendingFaceDate)
+	if err != nil || time.Since(updated) >= sessionTTL {
+		if clearErr := clearPendingFace(userID); clearErr != nil {
+			log.Printf("Не удалось очистить просроченную сессию пользователя %s: %v", userID, clearErr)
+		}
+		return "", nil
+	}
+	return user.PendingFaceFile, nil
+}
+
+func savePendingFace(userID, fileID string) error {
+	payload, err := json.Marshal(map[string]string{
+		"pending_face_file_id": fileID,
+		"pending_face_updated": time.Now().UTC().Format("2006-01-02 15:04:05.000Z"),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = sendAuthorizedRequest(
+		http.MethodPatch,
+		fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID),
+		payload,
+	)
+	return err
+}
+
+func clearPendingFace(userID string) error {
+	payload, err := json.Marshal(map[string]string{
+		"pending_face_file_id": "",
+		"pending_face_updated": "",
+	})
+	if err != nil {
+		return err
+	}
+	_, err = sendAuthorizedRequest(
+		http.MethodPatch,
+		fmt.Sprintf("%s/api/collections/users/records/%s", pocketBaseUrl, userID),
+		payload,
+	)
+	return err
+}
+
+func parsePocketBaseTime(value string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05.000Z"} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("неизвестный формат времени %q", value)
+}
+
+func createFaceJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, inputFaceFileID, requestKey string) (string, error) {
 	inputMediaPath, err := getTelegramFile(bot, inputMediaFileID)
 	if err != nil {
-		return "", fmt.Errorf("не удалось скачать видеофайл: %v", err)
+		return "", fmt.Errorf("не удалось получить медиафайл: %v", err)
 	}
+	defer removeDownloadedTelegramFile(inputMediaPath)
 
 	inputFacePath, err := getTelegramFile(bot, inputFaceFileID)
 	if err != nil {
-		return "", fmt.Errorf("не удалось скачать файл лица: %v", err)
+		return "", fmt.Errorf("не удалось получить файл лица: %v", err)
 	}
+	defer removeDownloadedTelegramFile(inputFacePath)
 
-	// file checker
-	inputMediaFile, err := os.Open(inputMediaPath)
-	if err != nil {
-		return "", fmt.Errorf("не удалось открыть видеофайл: %v", err)
-	}
-	defer inputMediaFile.Close()
-
-	inputFaceFile, err := os.Open(inputFacePath)
-	if err != nil {
-		return "", fmt.Errorf("не удалось открыть файл лица: %v", err)
-	}
-	defer inputFaceFile.Close()
-
-	// Check size
-	fileInfo, err := inputMediaFile.Stat()
-	if err != nil {
-		return "", fmt.Errorf("не удалось получить информацию о видеофайле: %v", err)
-	}
-	if fileInfo.Size() > 500*1024*1024 {
-		return "", fmt.Errorf("размер видео превышает 500 МБ")
-	}
-
-	faceFileInfo, err := inputFaceFile.Stat()
-	if err != nil {
-		return "", fmt.Errorf("не удалось получить информацию о файле лица: %v", err)
-	}
-	if faceFileInfo.Size() > 500*1024*1024 {
-		return "", fmt.Errorf("размер файла лица превышает 500 МБ")
-	}
-
-	// body for multipart/form-data
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	// metadata
-	_ = writer.WriteField("owner", userID)
-	_ = writer.WriteField("status", "queued")
-
-	// Добавляем файлы в request
-	mediaPart, err := writer.CreateFormFile("input_media", fileInfo.Name())
-	if err != nil {
-		return "", fmt.Errorf("не удалось создать часть для видеофайла: %v", err)
-	}
-	_, err = io.Copy(mediaPart, inputMediaFile)
-	if err != nil {
-		return "", fmt.Errorf("не удалось загрузить видеофайл: %v", err)
-	}
-
-	facePart, err := writer.CreateFormFile("input_face", faceFileInfo.Name())
-	if err != nil {
-		return "", fmt.Errorf("не удалось создать часть для файла лица: %v", err)
-	}
-	_, err = io.Copy(facePart, inputFaceFile)
-	if err != nil {
-		return "", fmt.Errorf("не удалось загрузить файл лица: %v", err)
-	}
-
-	err = writer.Close()
-	if err != nil {
-		return "", fmt.Errorf("не удалось завершить формирование multipart: %v", err)
-	}
-
-	// Формируем запрос
-	createJobURL := fmt.Sprintf("%s/api/collections/face_jobs/records", pocketBaseUrl)
-	req, err := http.NewRequest("POST", createJobURL, body)
-	if err != nil {
-		return "", fmt.Errorf("не удалось создать HTTP-запрос для создания задачи: %v", err)
-	}
-
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", authToken))
-
-	// Выполняем запрос
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("ошибка выполнения запроса на создание face job: %v", err)
-	}
-	defer resp.Body.Close()
-
-	// Обрабатываем ответ
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("ошибка чтения ответа: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ошибка создания face job, код: %d, ответ: %s", resp.StatusCode, string(respBody))
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("ошибка парсинга ответа JSON: %v", err)
-	}
-
-	jobID, ok := result["id"].(string)
-	if !ok || jobID == "" {
-		return "", fmt.Errorf("не удалось получить ID новой задачи, ответ: %s", string(respBody))
-	}
-
-	log.Printf("Задача Face Job успешно создана с ID: %s", jobID)
-	return jobID, nil
+	return createJobRecord("face_jobs", userID, requestKey, []uploadFile{
+		{Field: "input_media", Path: inputMediaPath},
+		{Field: "input_face", Path: inputFacePath},
+	})
 }
 
-// Функция для создания Circle Job
-func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID string) (string, error) {
-	// file download
+func createCircleJob(bot *tgbotapi.BotAPI, userID, inputMediaFileID, requestKey string) (string, error) {
 	inputMediaPath, err := getTelegramFile(bot, inputMediaFileID)
 	if err != nil {
-		return "", fmt.Errorf("не удалось скачать видеофайл: %v", err)
+		return "", fmt.Errorf("не удалось получить видеофайл: %v", err)
+	}
+	defer removeDownloadedTelegramFile(inputMediaPath)
+	return createJobRecord("circle_jobs", userID, requestKey, []uploadFile{
+		{Field: "input_media", Path: inputMediaPath},
+	})
+}
+
+type uploadFile struct {
+	Field string
+	Path  string
+}
+
+func createJobRecord(collection, userID, requestKey string, files []uploadFile) (string, error) {
+	for _, upload := range files {
+		info, err := os.Stat(upload.Path)
+		if err != nil {
+			return "", fmt.Errorf("не удалось получить информацию о файле %s: %v", upload.Field, err)
+		}
+		if info.Size() <= 0 {
+			return "", fmt.Errorf("файл %s пуст", upload.Field)
+		}
+		if info.Size() > 500*1024*1024 {
+			return "", fmt.Errorf("размер файла %s превышает 500 МБ", upload.Field)
+		}
 	}
 
-	// file check
-	inputMediaFile, err := os.Open(inputMediaPath)
+	requestURL := fmt.Sprintf("%s/api/collections/%s/records", pocketBaseUrl, collection)
+	body, statusCode, err := uploadJobOnce(requestURL, userID, requestKey, files)
 	if err != nil {
-		return "", fmt.Errorf("не удалось открыть видеофайл: %v", err)
+		if existingID := findJobByRequestKey(collection, requestKey); existingID != "" {
+			return existingID, nil
+		}
+		return "", err
 	}
-	defer inputMediaFile.Close()
+	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
+		refreshMutex.Lock()
+		refreshErr := authenticatePocketBase()
+		if refreshErr == nil {
+			body, statusCode, err = uploadJobOnce(requestURL, userID, requestKey, files)
+		}
+		refreshMutex.Unlock()
+		if refreshErr != nil {
+			return "", fmt.Errorf("ошибка обновления авторизации PocketBase: %v", refreshErr)
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+		if existingID := findJobByRequestKey(collection, requestKey); existingID != "" {
+			return existingID, nil
+		}
+		return "", fmt.Errorf("PocketBase вернул код %d при создании задачи: %s", statusCode, limitedResponse(body))
+	}
 
-	// Check size
-	// needed for testing. will be removed.
-	fileInfo, err := inputMediaFile.Stat()
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("ошибка разбора созданной задачи: %v", err)
+	}
+	if result.ID == "" {
+		return "", fmt.Errorf("PocketBase не вернул ID созданной задачи")
+	}
+	log.Printf("Задача %s успешно создана с ID %s", collection, result.ID)
+	return result.ID, nil
+}
+
+func uploadJobOnce(requestURL, userID, requestKey string, files []uploadFile) ([]byte, int, error) {
+	reader, writer := io.Pipe()
+	multipartWriter := multipart.NewWriter(writer)
+	contentType := multipartWriter.FormDataContentType()
+	writeResult := make(chan error, 1)
+	go func() {
+		err := writeJobMultipart(multipartWriter, userID, requestKey, files)
+		if err == nil {
+			err = multipartWriter.Close()
+		}
+		_ = writer.CloseWithError(err)
+		writeResult <- err
+	}()
+
+	req, err := http.NewRequest(http.MethodPost, requestURL, reader)
 	if err != nil {
-		return "", fmt.Errorf("не удалось получить информацию о видеофайле: %v", err)
+		_ = reader.CloseWithError(err)
+		<-writeResult
+		return nil, 0, fmt.Errorf("ошибка создания запроса задачи: %v", err)
 	}
-	if fileInfo.Size() > 500*1024*1024 {
-		return "", fmt.Errorf("размер видео превышает 500 МБ")
+	req.Header.Set("Content-Type", contentType)
+	if token := currentAuthToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	// Создаем body для multipart/form-data
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	// Добавляем метаданные (например, владелец и статус)
-	_ = writer.WriteField("owner", userID)
-	_ = writer.WriteField("status", "queued") // Статус задачи по умолчанию
-
-	// Добавляем файлы в request
-	mediaPart, err := writer.CreateFormFile("input_media", fileInfo.Name())
+	resp, err := mediaClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("не удалось создать часть для видеофайла: %v", err)
-	}
-	_, err = io.Copy(mediaPart, inputMediaFile)
-	if err != nil {
-		return "", fmt.Errorf("не удалось загрузить видеофайл: %v", err)
-	}
-
-	// Закрываем writer, чтобы завершить формирование multipart
-	err = writer.Close()
-	if err != nil {
-		return "", fmt.Errorf("не удалось завершить формирование multipart: %v", err)
-	}
-
-	// Формируем запрос
-	createJobURL := fmt.Sprintf("%s/api/collections/circle_jobs/records", pocketBaseUrl)
-	req, err := http.NewRequest("POST", createJobURL, body)
-	if err != nil {
-		return "", fmt.Errorf("не удалось создать HTTP-запрос для создания задачи: %v", err)
-	}
-
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", authToken)) // Добавляем токен авторизации
-
-	// Выполняем запрос
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("ошибка выполнения запроса на создание circle job: %v", err)
+		_ = reader.CloseWithError(err)
+		<-writeResult
+		return nil, 0, fmt.Errorf("ошибка загрузки задачи: %v", err)
 	}
 	defer resp.Body.Close()
-
-	// Обрабатываем ответ
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("ошибка чтения ответа: %v", err)
+	body, readErr := io.ReadAll(resp.Body)
+	writeErr := <-writeResult
+	if writeErr != nil {
+		return nil, resp.StatusCode, fmt.Errorf("ошибка формирования задачи: %v", writeErr)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ошибка создания face job, код: %d, ответ: %s", resp.StatusCode, string(respBody))
+	if readErr != nil {
+		return nil, resp.StatusCode, fmt.Errorf("ошибка чтения ответа создания задачи: %v", readErr)
 	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("ошибка парсинга ответа JSON: %v", err)
-	}
-
-	jobID, ok := result["id"].(string)
-	if !ok || jobID == "" {
-		return "", fmt.Errorf("не удалось получить ID новой задачи, ответ: %s", string(respBody))
-	}
-
-	log.Printf("Задача Circle Job успешно создана с ID: %s", jobID)
-	return jobID, nil
+	return body, resp.StatusCode, nil
 }
 
-func getUserInfo(tgUserID int) (map[string]interface{}, error) {
-	// Поиск пользователя в PocketBase по tgid
-	searchURL := fmt.Sprintf("%s/api/collections/users/records?filter=tgid=%d", pocketBaseUrl, tgUserID)
-	resp, err := sendAuthorizedRequest("GET", searchURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("ошибка при запросе пользователя: %v", err)
+func writeJobMultipart(writer *multipart.Writer, userID, requestKey string, files []uploadFile) error {
+	if err := writer.WriteField("owner", userID); err != nil {
+		return err
 	}
-
-	var searchResult map[string]interface{}
-	if err := json.Unmarshal(resp, &searchResult); err != nil {
-		return nil, fmt.Errorf("ошибка разбора ответа при получении пользователя: %v", err)
+	if err := writer.WriteField("status", "queued"); err != nil {
+		return err
 	}
-
-	if items, ok := searchResult["items"].([]interface{}); ok && len(items) > 0 {
-		if user, ok := items[0].(map[string]interface{}); ok {
-			return user, nil
+	if err := writer.WriteField("request_key", requestKey); err != nil {
+		return err
+	}
+	for _, upload := range files {
+		file, err := os.Open(upload.Path)
+		if err != nil {
+			return err
+		}
+		part, err := writer.CreateFormFile(upload.Field, filepath.Base(upload.Path))
+		if err == nil {
+			_, err = io.Copy(part, file)
+		}
+		closeErr := file.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
 		}
 	}
-
-	return nil, fmt.Errorf("пользователь с Telegram ID %d не найден", tgUserID)
+	return nil
 }
 
-func getActiveJobs(userID, collection string) ([]map[string]interface{}, error) {
-	filter := fmt.Sprintf("owner=\"%s\" && status!=\"completed\"", userID)
-	encodedFilter := url.QueryEscape(filter) // Кодируем фильтр для передачи в URL
-
-	searchURL := fmt.Sprintf("%s/api/collections/%s/records?filter=%s", pocketBaseUrl, collection, encodedFilter)
-
-	resp, err := sendAuthorizedRequest("GET", searchURL, nil)
+func findJobByRequestKey(collection, requestKey string) string {
+	if requestKey == "" {
+		return ""
+	}
+	query := url.Values{}
+	query.Set("filter", fmt.Sprintf("request_key=\"%s\"", requestKey))
+	query.Set("perPage", "1")
+	body, err := sendAuthorizedRequest(
+		http.MethodGet,
+		fmt.Sprintf("%s/api/collections/%s/records?%s", pocketBaseUrl, collection, query.Encode()),
+		nil,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка при запросе задач: %v", err)
+		return ""
 	}
-
-	var searchResult map[string]interface{}
-	if err := json.Unmarshal(resp, &searchResult); err != nil {
-		return nil, fmt.Errorf("ошибка разбора ответа при получении задач: %v, ответ: %s", err, string(resp))
+	var result struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
 	}
-
-	if items, ok := searchResult["items"].([]interface{}); ok {
-		jobs := make([]map[string]interface{}, len(items))
-		for i, item := range items {
-			if job, ok := item.(map[string]interface{}); ok {
-				jobs[i] = job
-			}
-		}
-		return jobs, nil
+	if err := json.Unmarshal(body, &result); err != nil || len(result.Items) == 0 {
+		return ""
 	}
-
-	return nil, nil
+	return result.Items[0].ID
 }
 
-// Обновление статуса задачи
+func findExistingJobByRequestKey(requestKey string) string {
+	for _, collection := range []string{"circle_jobs", "face_jobs"} {
+		if jobID := findJobByRequestKey(collection, requestKey); jobID != "" {
+			return jobID
+		}
+	}
+	return ""
+}
+
+func removeDownloadedTelegramFile(path string) {
+	cacheDir, err := filepath.Abs(botCacheDirectory())
+	if err != nil {
+		return
+	}
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return
+	}
+	if strings.HasPrefix(absolutePath, cacheDir+string(os.PathSeparator)) {
+		if err := os.Remove(absolutePath); err != nil && !os.IsNotExist(err) {
+			log.Printf("Не удалось удалить временный файл %s: %v", absolutePath, err)
+		}
+	}
+}
+
+func getUserInfo(tgUserID int64) (UserRecord, error) {
+	user, err := findUser(tgUserID)
+	if err != nil {
+		return UserRecord{}, err
+	}
+	if user == nil {
+		return UserRecord{}, fmt.Errorf("пользователь с Telegram ID %d не найден", tgUserID)
+	}
+	return *user, nil
+}
+
+func getActiveJobs(userID, collection string) ([]JobRecord, error) {
+	if collection != "circle_jobs" && collection != "face_jobs" {
+		return nil, fmt.Errorf("неизвестная коллекция задач %q", collection)
+	}
+	query := url.Values{}
+	query.Set("filter", fmt.Sprintf("owner=\"%s\" && status!=\"completed\"", userID))
+	query.Set("sort", "-created")
+	query.Set("perPage", "100")
+	body, err := sendAuthorizedRequest(
+		http.MethodGet,
+		fmt.Sprintf("%s/api/collections/%s/records?%s", pocketBaseUrl, collection, query.Encode()),
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("ошибка получения задач: %v", err)
+	}
+	var result recordList[JobRecord]
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("ошибка разбора задач: %v", err)
+	}
+	return result.Items, nil
+}
+
 func updateStatus(collection, taskID, status string) error {
-	url := fmt.Sprintf("%s/api/collections/%s/records/%s", pocketBaseUrl, collection, taskID)
-
-	data := map[string]string{
-		"status": status,
+	if collection != "circle_jobs" && collection != "face_jobs" {
+		return fmt.Errorf("неизвестная коллекция задач %q", collection)
 	}
-	jsonData, err := json.Marshal(data)
+	payload, err := json.Marshal(map[string]string{"status": status})
 	if err != nil {
-		return fmt.Errorf("ошибка сериализации данных для обновления статуса: %v", err)
+		return fmt.Errorf("ошибка сериализации статуса: %v", err)
 	}
-
-	_, err = sendAuthorizedRequest("PATCH", url, jsonData)
+	_, err = sendAuthorizedRequest(
+		http.MethodPatch,
+		fmt.Sprintf("%s/api/collections/%s/records/%s", pocketBaseUrl, collection, taskID),
+		payload,
+	)
 	if err != nil {
 		return fmt.Errorf("ошибка обновления статуса задачи: %v", err)
 	}
-
 	return nil
 }

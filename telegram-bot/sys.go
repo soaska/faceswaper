@@ -7,178 +7,225 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 	"github.com/joho/godotenv"
 )
 
-// Token refresh mutex to prevent concurrent refresh attempts
-var tokenRefreshMutex sync.Mutex
-
-// PocketBase global credentials
 var (
 	pocketBaseUrl string
 	email         string
 	password      string
 	authToken     string
-	api_endpint   string
+	apiEndpoint   string
+	tokenMutex    sync.RWMutex
+	refreshMutex  sync.Mutex
 )
 
-// refreshToken re-authenticates with PocketBase and updates the authToken
-func refreshToken() error {
-	tokenRefreshMutex.Lock()
-	defer tokenRefreshMutex.Unlock()
+var (
+	apiHTTPClient = &http.Client{Timeout: 30 * time.Second}
+	mediaClient   = &http.Client{Timeout: 30 * time.Minute}
+	botHTTPClient = &http.Client{Timeout: 75 * time.Second}
+)
 
-	log.Println("PocketBase: Обновление JWT токена...")
-	err := authenticatePocketBase()
-	if err != nil {
-		return fmt.Errorf("не удалось обновить JWT токен: %v", err)
-	}
-	log.Println("PocketBase: JWT токен успешно обновлён")
-	return nil
-}
-
-// sendAuthorizedRequest sends a request to PocketBase with JWT authentication
-// If a 401/403 error occurs, it will refresh the token and retry once
-func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
-	body, statusCode, err := doAuthorizedRequest(method, url, payload)
+func sendAuthorizedRequest(method, requestURL string, payload []byte) ([]byte, error) {
+	body, statusCode, err := doAuthorizedRequest(method, requestURL, payload)
 	if err != nil {
 		return nil, err
 	}
-
-	// Check for auth errors (401 Unauthorized or 403 Forbidden)
 	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
-		log.Printf("PocketBase: Получен код %d, пробуем обновить токен...", statusCode)
-
-		// Refresh the token
-		if refreshErr := refreshToken(); refreshErr != nil {
-			return nil, fmt.Errorf("ошибка обновления токена после %d: %v", statusCode, refreshErr)
+		refreshMutex.Lock()
+		refreshErr := authenticatePocketBase()
+		if refreshErr == nil {
+			body, statusCode, err = doAuthorizedRequest(method, requestURL, payload)
 		}
-
-		// Retry the request with the new token
-		body, statusCode, err = doAuthorizedRequest(method, url, payload)
+		refreshMutex.Unlock()
+		if refreshErr != nil {
+			return nil, fmt.Errorf("ошибка обновления авторизации PocketBase: %v", refreshErr)
+		}
 		if err != nil {
 			return nil, err
 		}
-
-		// If still getting auth error after refresh, return error
-		if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
-			return nil, fmt.Errorf("ошибка авторизации после обновления токена, код: %d, ответ: %s", statusCode, string(body))
-		}
 	}
-
+	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("PocketBase вернул код %d: %s", statusCode, limitedResponse(body))
+	}
 	return body, nil
 }
 
-// doAuthorizedRequest performs the actual HTTP request
-func doAuthorizedRequest(method, url string, payload []byte) ([]byte, int, error) {
-	client := &http.Client{}
-	req, err := http.NewRequest(method, url, bytes.NewBuffer(payload))
+func doAuthorizedRequest(method, requestURL string, payload []byte) ([]byte, int, error) {
+	req, err := http.NewRequest(method, requestURL, bytes.NewReader(payload))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("ошибка создания запроса PocketBase: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-
-	if authToken != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", authToken))
+	if token := currentAuthToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := apiHTTPClient.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("ошибка запроса PocketBase: %v", err)
 	}
 	defer resp.Body.Close()
-
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, 0, err
+		return nil, resp.StatusCode, fmt.Errorf("ошибка чтения ответа PocketBase: %v", err)
 	}
-
 	return body, resp.StatusCode, nil
 }
 
-type FileResponse struct {
-	Ok     bool                   `json:"ok"`
-	Result map[string]interface{} `json:"result"`
+func currentAuthToken() string {
+	tokenMutex.RLock()
+	defer tokenMutex.RUnlock()
+	return authToken
+}
+
+func setAuthToken(token string) {
+	tokenMutex.Lock()
+	authToken = token
+	tokenMutex.Unlock()
+}
+
+func limitedResponse(body []byte) string {
+	const maxLength = 1000
+	if len(body) <= maxLength {
+		return string(body)
+	}
+	return string(body[:maxLength]) + "…"
+}
+
+type fileResponse struct {
+	OK          bool       `json:"ok"`
+	Description string     `json:"description"`
+	Result      fileResult `json:"result"`
+}
+
+type fileResult struct {
+	FilePath string `json:"file_path"`
 }
 
 func getTelegramFile(bot *tgbotapi.BotAPI, fileID string) (string, error) {
-	// file, err := bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
-	CallUrl := fmt.Sprintf("%s/bot%s/getFile?file_id=%s", api_endpint, bot.Token, fileID)
-	resp, err := http.Get(CallUrl)
+	requestURL := fmt.Sprintf(
+		"%s/bot%s/getFile?file_id=%s",
+		apiEndpoint,
+		bot.Token,
+		url.QueryEscape(fileID),
+	)
+	resp, err := apiHTTPClient.Get(requestURL)
 	if err != nil {
-		return "", fmt.Errorf("ошибка http запроса: %v", err)
+		return "", fmt.Errorf("ошибка запроса файла Telegram: %v", err)
 	}
 	defer resp.Body.Close()
-
-	responseBody, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("ошибка чтения ответа сервера: %v", err)
+		return "", fmt.Errorf("ошибка чтения ответа Telegram: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("Telegram API вернул код %d: %s", resp.StatusCode, limitedResponse(body))
 	}
 
-	fileResponse := &FileResponse{}
-	err = json.Unmarshal(responseBody, fileResponse)
-	if err != nil {
-		return "", fmt.Errorf("ошибка расшифровки ответа JSON: %v", err)
+	var response fileResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return "", fmt.Errorf("ошибка разбора ответа Telegram: %v", err)
+	}
+	if !response.OK || response.Result.FilePath == "" {
+		return "", fmt.Errorf("Telegram API не вернул путь к файлу: %s", response.Description)
+	}
+	if filepath.IsAbs(response.Result.FilePath) {
+		return filepath.Clean(response.Result.FilePath), nil
 	}
 
-	if fileResponse.Ok {
-		filePath, ok := fileResponse.Result["file_path"]
-		if !ok || filePath == "" {
-			return "", fmt.Errorf("не найден путь в ответе сервера")
-		}
-		// serverPath := fmt.Sprintf("/storage/%s/%s", bot.Token, filePath.(string))
-		return filePath.(string), nil
-	} else {
-		return "", fmt.Errorf("ошибка получения пути: %v", resp.StatusCode)
-	}
+	return downloadTelegramFile(bot.Token, response.Result.FilePath)
 }
 
-// loading env variables from .env or system environment
+func downloadTelegramFile(token, remotePath string) (string, error) {
+	cacheDir := botCacheDirectory()
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return "", fmt.Errorf("ошибка создания временной директории: %v", err)
+	}
+	extension := strings.ToLower(filepath.Ext(remotePath))
+	if len(extension) > 10 || strings.ContainsAny(extension, `/\\`) {
+		extension = ""
+	}
+	file, err := os.CreateTemp(cacheDir, "telegram-*"+extension)
+	if err != nil {
+		return "", fmt.Errorf("ошибка создания временного файла: %v", err)
+	}
+	filePath := file.Name()
+	removeFile := true
+	defer func() {
+		_ = file.Close()
+		if removeFile {
+			_ = os.Remove(filePath)
+		}
+	}()
+
+	requestURL := fmt.Sprintf("%s/file/bot%s/%s", apiEndpoint, token, strings.TrimLeft(remotePath, "/"))
+	resp, err := mediaClient.Get(requestURL)
+	if err != nil {
+		return "", fmt.Errorf("ошибка скачивания файла Telegram: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1000))
+		return "", fmt.Errorf("Telegram API вернул код %d при скачивании: %s", resp.StatusCode, string(body))
+	}
+	if _, err := io.Copy(file, resp.Body); err != nil {
+		return "", fmt.Errorf("ошибка сохранения файла Telegram: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("ошибка закрытия файла Telegram: %v", err)
+	}
+	removeFile = false
+	return filePath, nil
+}
+
+func botCacheDirectory() string {
+	if configured := strings.TrimSpace(os.Getenv("BOT_CACHE_DIR")); configured != "" {
+		return configured
+	}
+	if os.Getenv("DOCKER_BUILD") != "" {
+		return "/tmp/faceswaper-bot"
+	}
+	return "cache"
+}
+
 func LoadEnvironment() (string, bool, string) {
-	if os.Getenv("DOCKER_BUILD") == `` {
-		err := godotenv.Load()
-		if err != nil {
-			log.Fatalf("Error loading .env file")
+	if os.Getenv("DOCKER_BUILD") == "" {
+		if err := godotenv.Load(); err != nil {
+			log.Fatal("Не удалось загрузить .env")
 		}
 	}
 
-	// load telegram token
-	bot_token := os.Getenv("TELEGRAM_APITOKEN")
-	if bot_token == `` {
-		log.Fatal("empty telegram api token loaded, check TELEGRAM_APITOKEN value")
+	botToken := strings.TrimSpace(os.Getenv("TELEGRAM_APITOKEN"))
+	if botToken == "" {
+		log.Fatal("TELEGRAM_APITOKEN не задан")
 	}
+	botDebug := os.Getenv("BOT_DEBUG") == "true"
 
-	// telegram bot debug mode
-	var bot_debug bool
-	if os.Getenv("BOT_DEBUG") == `true` {
-		bot_debug = true
-	} else {
-		bot_debug = false
+	apiEndpoint = strings.TrimRight(strings.TrimSpace(os.Getenv("TELEGRAM_API")), "/")
+	if apiEndpoint == "" {
+		apiEndpoint = "https://api.telegram.org"
 	}
-
-	api_endpint = os.Getenv("TELEGRAM_API")
-	if api_endpint == `` {
-		api_endpint = "https://api.telegram.org"
+	pocketBaseUrl = strings.TrimRight(strings.TrimSpace(os.Getenv("POCKETBASE_URL")), "/")
+	if pocketBaseUrl == "" {
+		log.Fatal("POCKETBASE_URL не задан")
 	}
-
-	// pocketbase
-	pocketBaseUrl = os.Getenv("POCKETBASE_URL")
-	if pocketBaseUrl == `` {
-		log.Fatal("empty pocketbase url loaded, check POCKETBASE_URL value")
+	email = strings.TrimSpace(os.Getenv("POCKETBASE_LOGIN"))
+	if email == "" {
+		log.Fatal("POCKETBASE_LOGIN не задан")
 	}
-
-	email = os.Getenv("POCKETBASE_LOGIN")
-	if email == `` {
-		log.Fatal("empty pocketbase login loaded. env is not correct or configuration is insecure")
-	}
-
 	password = os.Getenv("POCKETBASE_PASSWORD")
-	if password == `` {
-		log.Fatal("empty pocketbase password loaded. env is not correct or configuration is insecure")
+	if password == "" {
+		log.Fatal("POCKETBASE_PASSWORD не задан")
 	}
 
-	return bot_token, bot_debug, api_endpint
+	return botToken, botDebug, apiEndpoint
 }
