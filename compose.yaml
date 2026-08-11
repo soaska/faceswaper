@@ -70,8 +70,8 @@ services:
 
   job-manager:
     build:
-      context: ./job-manager
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: job-manager/Dockerfile
       args:
         GIT_COMMIT: ${GIT_COMMIT:-unknown}
     environment:
@@ -95,8 +95,8 @@ services:
 
   telegram-bot:
     build:
-      context: ./telegram-bot
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: telegram-bot/Dockerfile
       args:
         GIT_COMMIT: ${GIT_COMMIT:-unknown}
     environment:

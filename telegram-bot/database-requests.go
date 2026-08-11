@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,45 +38,6 @@ type JobRecord struct {
 
 type recordList[T any] struct {
 	Items []T `json:"items"`
-}
-
-func authenticatePocketBase() error {
-	payload, err := json.Marshal(map[string]string{
-		"identity": email,
-		"password": password,
-	})
-	if err != nil {
-		return fmt.Errorf("ошибка сериализации данных авторизации: %v", err)
-	}
-	resp, err := apiHTTPClient.Post(
-		pocketBaseUrl+"/api/admins/auth-with-password",
-		"application/json",
-		bytes.NewReader(payload),
-	)
-	if err != nil {
-		return fmt.Errorf("ошибка запроса авторизации PocketBase: %v", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("ошибка чтения ответа авторизации: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("авторизация не удалась, код %d: %s", resp.StatusCode, limitedResponse(body))
-	}
-
-	var response struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return fmt.Errorf("ошибка разбора ответа авторизации: %v", err)
-	}
-	if response.Token == "" {
-		return fmt.Errorf("PocketBase не вернул токен")
-	}
-	setAuthToken(response.Token)
-	log.Println("PocketBase: авторизация прошла успешно")
-	return nil
 }
 
 func getOrCreateUser(tgUserID int64, tgUsername string) (string, error) {
@@ -281,26 +241,14 @@ func createJobRecord(collection, userID, requestKey string, files []uploadFile) 
 	}
 
 	requestURL := fmt.Sprintf("%s/api/collections/%s/records", pocketBaseUrl, collection)
-	body, statusCode, err := uploadJobOnce(requestURL, userID, requestKey, files)
+	body, statusCode, err := pocketBaseClient.DoAuthenticated(func(token string) ([]byte, int, error) {
+		return uploadJobOnce(requestURL, userID, requestKey, files, token)
+	})
 	if err != nil {
 		if existingID := findJobByRequestKey(collection, requestKey); existingID != "" {
 			return existingID, nil
 		}
 		return "", err
-	}
-	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
-		refreshMutex.Lock()
-		refreshErr := authenticatePocketBase()
-		if refreshErr == nil {
-			body, statusCode, err = uploadJobOnce(requestURL, userID, requestKey, files)
-		}
-		refreshMutex.Unlock()
-		if refreshErr != nil {
-			return "", fmt.Errorf("ошибка обновления авторизации PocketBase: %v", refreshErr)
-		}
-		if err != nil {
-			return "", err
-		}
 	}
 	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
 		if existingID := findJobByRequestKey(collection, requestKey); existingID != "" {
@@ -322,7 +270,7 @@ func createJobRecord(collection, userID, requestKey string, files []uploadFile) 
 	return result.ID, nil
 }
 
-func uploadJobOnce(requestURL, userID, requestKey string, files []uploadFile) ([]byte, int, error) {
+func uploadJobOnce(requestURL, userID, requestKey string, files []uploadFile, token string) ([]byte, int, error) {
 	reader, writer := io.Pipe()
 	multipartWriter := multipart.NewWriter(writer)
 	contentType := multipartWriter.FormDataContentType()
@@ -343,7 +291,7 @@ func uploadJobOnce(requestURL, userID, requestKey string, files []uploadFile) ([
 		return nil, 0, fmt.Errorf("ошибка создания запроса задачи: %v", err)
 	}
 	req.Header.Set("Content-Type", contentType)
-	if token := currentAuthToken(); token != "" {
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 

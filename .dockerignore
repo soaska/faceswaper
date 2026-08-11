@@ -1,0 +1,12 @@
+*
+!shared/
+!shared/**
+!job-manager/
+!job-manager/**
+!telegram-bot/
+!telegram-bot/**
+
+job-manager/cache/
+telegram-bot/cache/
+**/*.test
+**/*.log

@@ -44,11 +44,13 @@ func TestGetOrCreateUserPreservesMainDefaults(t *testing.T) {
 
 	oldClient := apiHTTPClient
 	oldURL := pocketBaseUrl
+	oldPocketBaseClient := pocketBaseClient
 	apiHTTPClient = &http.Client{Transport: transport}
-	pocketBaseUrl = "http://pocketbase.test"
+	configurePocketBase("http://pocketbase.test", "admin", "secret", apiHTTPClient)
 	defer func() {
 		apiHTTPClient = oldClient
 		pocketBaseUrl = oldURL
+		pocketBaseClient = oldPocketBaseClient
 	}()
 
 	userID, err := getOrCreateUser(123456, "tester")
@@ -89,7 +91,12 @@ func TestSendAuthorizedRequestRejectsServerError(t *testing.T) {
 			Header:     make(http.Header),
 		}, nil
 	})}
-	defer func() { apiHTTPClient = oldClient }()
+	oldPocketBaseClient := pocketBaseClient
+	configurePocketBase("http://pocketbase.test", "admin", "secret", apiHTTPClient)
+	defer func() {
+		apiHTTPClient = oldClient
+		pocketBaseClient = oldPocketBaseClient
+	}()
 
 	_, err := sendAuthorizedRequest(http.MethodGet, "http://pocketbase.test/fail", nil)
 	if err == nil || !strings.Contains(err.Error(), "код 500") {
@@ -147,6 +154,7 @@ func TestUploadJobWritesFieldsAndFiles(t *testing.T) {
 		"user1",
 		"telegram:42",
 		[]uploadFile{{Field: "input_face", Path: tempFile.Name()}},
+		"",
 	)
 	if err != nil || statusCode != http.StatusOK || !strings.Contains(string(body), "job1") {
 		t.Fatalf("uploadJobOnce() = %s, %d, %v", body, statusCode, err)

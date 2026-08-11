@@ -1,79 +1,23 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 )
-
-func authenticatePocketBase() error {
-	authData, err := json.Marshal(map[string]string{
-		"identity": email,
-		"password": password,
-	})
-	if err != nil {
-		return fmt.Errorf("ошибка сериализации данных авторизации: %v", err)
-	}
-
-	resp, err := apiHTTPClient.Post(
-		pocketBaseUrl+"/api/admins/auth-with-password",
-		"application/json",
-		bytes.NewReader(authData),
-	)
-	if err != nil {
-		return fmt.Errorf("не удалось отправить запрос на авторизацию: %v", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("ошибка чтения ответа авторизации: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("авторизация не удалась, код %d: %s", resp.StatusCode, limitedBody(body))
-	}
-
-	var authResponse struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(body, &authResponse); err != nil {
-		return fmt.Errorf("ошибка разбора ответа авторизации: %v", err)
-	}
-	if authResponse.Token == "" {
-		return fmt.Errorf("PocketBase не вернул токен")
-	}
-
-	setAuthToken(authResponse.Token)
-	log.Println("PocketBase: авторизация прошла успешно")
-	return nil
-}
 
 // uploadOutputMedia stores the result but deliberately leaves task status
 // unchanged. A task becomes completed only after Telegram confirms delivery.
 func uploadOutputMedia(ctx context.Context, collection, taskID, filePath string) error {
 	url := fmt.Sprintf("%s/api/collections/%s/records/%s", pocketBaseUrl, collection, taskID)
-	responseBody, statusCode, err := uploadOutputMediaOnce(ctx, url, filePath)
+	responseBody, statusCode, err := pocketBaseClient.DoAuthenticated(func(token string) ([]byte, int, error) {
+		return uploadOutputMediaOnce(ctx, url, filePath, token)
+	})
 	if err != nil {
 		return err
-	}
-	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
-		refreshMutex.Lock()
-		refreshErr := authenticatePocketBase()
-		if refreshErr == nil {
-			responseBody, statusCode, err = uploadOutputMediaOnce(ctx, url, filePath)
-		}
-		refreshMutex.Unlock()
-		if refreshErr != nil {
-			return fmt.Errorf("ошибка обновления авторизации PocketBase: %v", refreshErr)
-		}
-		if err != nil {
-			return err
-		}
 	}
 	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
 		return fmt.Errorf("ошибка загрузки файла, код %d: %s", statusCode, limitedBody(responseBody))
@@ -81,9 +25,9 @@ func uploadOutputMedia(ctx context.Context, collection, taskID, filePath string)
 	return nil
 }
 
-func uploadOutputMediaOnce(ctx context.Context, url, filePath string) ([]byte, int, error) {
+func uploadOutputMediaOnce(ctx context.Context, url, filePath, token string) ([]byte, int, error) {
 	headers := make(http.Header)
-	if token := currentAuthToken(); token != "" {
+	if token != "" {
 		headers.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := doStreamingMultipartFileRequest(

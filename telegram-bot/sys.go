@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,21 +10,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	tgbotapi "github.com/OvyFlash/telegram-bot-api"
 	"github.com/joho/godotenv"
+	sharedpb "github.com/soaska/faceswaper/shared/pocketbase"
 )
 
 var (
-	pocketBaseUrl string
-	email         string
-	password      string
-	authToken     string
-	apiEndpoint   string
-	tokenMutex    sync.RWMutex
-	refreshMutex  sync.Mutex
+	pocketBaseUrl    string
+	pocketBaseClient *sharedpb.Client
+	apiEndpoint      string
 )
 
 var (
@@ -35,70 +30,30 @@ var (
 )
 
 func sendAuthorizedRequest(method, requestURL string, payload []byte) ([]byte, error) {
-	body, statusCode, err := doAuthorizedRequest(method, requestURL, payload)
-	if err != nil {
-		return nil, err
+	if pocketBaseClient == nil {
+		return nil, fmt.Errorf("клиент PocketBase не настроен")
 	}
-	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
-		refreshMutex.Lock()
-		refreshErr := authenticatePocketBase()
-		if refreshErr == nil {
-			body, statusCode, err = doAuthorizedRequest(method, requestURL, payload)
-		}
-		refreshMutex.Unlock()
-		if refreshErr != nil {
-			return nil, fmt.Errorf("ошибка обновления авторизации PocketBase: %v", refreshErr)
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("PocketBase вернул код %d: %s", statusCode, limitedResponse(body))
-	}
-	return body, nil
+	return pocketBaseClient.Do(method, requestURL, payload)
 }
 
-func doAuthorizedRequest(method, requestURL string, payload []byte) ([]byte, int, error) {
-	req, err := http.NewRequest(method, requestURL, bytes.NewReader(payload))
-	if err != nil {
-		return nil, 0, fmt.Errorf("ошибка создания запроса PocketBase: %v", err)
+func authenticatePocketBase() error {
+	if pocketBaseClient == nil {
+		return fmt.Errorf("клиент PocketBase не настроен")
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if token := currentAuthToken(); token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
+	if err := pocketBaseClient.Authenticate(); err != nil {
+		return err
 	}
-
-	resp, err := apiHTTPClient.Do(req)
-	if err != nil {
-		return nil, 0, fmt.Errorf("ошибка запроса PocketBase: %v", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("ошибка чтения ответа PocketBase: %v", err)
-	}
-	return body, resp.StatusCode, nil
+	log.Println("PocketBase: авторизация прошла успешно")
+	return nil
 }
 
-func currentAuthToken() string {
-	tokenMutex.RLock()
-	defer tokenMutex.RUnlock()
-	return authToken
-}
-
-func setAuthToken(token string) {
-	tokenMutex.Lock()
-	authToken = token
-	tokenMutex.Unlock()
+func configurePocketBase(baseURL, identity, password string, httpClient *http.Client) {
+	pocketBaseUrl = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	pocketBaseClient = sharedpb.New(pocketBaseUrl, identity, password, httpClient)
 }
 
 func limitedResponse(body []byte) string {
-	const maxLength = 1000
-	if len(body) <= maxLength {
-		return string(body)
-	}
-	return string(body[:maxLength]) + "…"
+	return sharedpb.LimitedBody(body)
 }
 
 type fileResponse struct {
@@ -218,14 +173,15 @@ func LoadEnvironment() (string, bool, string) {
 	if pocketBaseUrl == "" {
 		log.Fatal("POCKETBASE_URL не задан")
 	}
-	email = strings.TrimSpace(os.Getenv("POCKETBASE_LOGIN"))
+	email := strings.TrimSpace(os.Getenv("POCKETBASE_LOGIN"))
 	if email == "" {
 		log.Fatal("POCKETBASE_LOGIN не задан")
 	}
-	password = os.Getenv("POCKETBASE_PASSWORD")
+	password := os.Getenv("POCKETBASE_PASSWORD")
 	if password == "" {
 		log.Fatal("POCKETBASE_PASSWORD не задан")
 	}
+	configurePocketBase(pocketBaseUrl, email, password, apiHTTPClient)
 
 	return botToken, botDebug, apiEndpoint
 }

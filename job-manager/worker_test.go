@@ -111,11 +111,13 @@ func TestSanitizeWorkerID(t *testing.T) {
 func TestSettleJobRetriesIdenticalIdempotentRequest(t *testing.T) {
 	oldClient := apiHTTPClient
 	oldURL := pocketBaseUrl
+	oldPocketBaseClient := pocketBaseClient
 	oldWorkerID := workerID
 	oldRetryDelay := settlementRetryBaseDelay
 	defer func() {
 		apiHTTPClient = oldClient
 		pocketBaseUrl = oldURL
+		pocketBaseClient = oldPocketBaseClient
 		workerID = oldWorkerID
 		settlementRetryBaseDelay = oldRetryDelay
 	}()
@@ -142,6 +144,7 @@ func TestSettleJobRetriesIdenticalIdempotentRequest(t *testing.T) {
 			Header:     make(http.Header),
 		}, nil
 	})}
+	configurePocketBase(pocketBaseUrl, "admin", "secret", apiHTTPClient)
 
 	result, err := settleJob(settlementRequest{
 		Collection: "face_jobs",
@@ -172,10 +175,12 @@ func TestSettleJobRetriesIdenticalIdempotentRequest(t *testing.T) {
 func TestSettleJobDoesNotRetryRejectedRequest(t *testing.T) {
 	oldClient := apiHTTPClient
 	oldURL := pocketBaseUrl
+	oldPocketBaseClient := pocketBaseClient
 	oldWorkerID := workerID
 	defer func() {
 		apiHTTPClient = oldClient
 		pocketBaseUrl = oldURL
+		pocketBaseClient = oldPocketBaseClient
 		workerID = oldWorkerID
 	}()
 
@@ -190,6 +195,7 @@ func TestSettleJobDoesNotRetryRejectedRequest(t *testing.T) {
 			Header:     make(http.Header),
 		}, nil
 	})}
+	configurePocketBase(pocketBaseUrl, "admin", "secret", apiHTTPClient)
 
 	_, err := settleJob(settlementRequest{Collection: "circle_jobs", TaskID: "job123", Action: "start_sending", Price: 1})
 	if err == nil || !isRejectedSettlement(err) {
@@ -238,6 +244,7 @@ func TestCleanupTaskFilesOnlyRemovesRequestedTask(t *testing.T) {
 
 func TestSendAuthorizedRequestRejectsNonSuccessStatus(t *testing.T) {
 	oldClient := apiHTTPClient
+	oldPocketBaseClient := pocketBaseClient
 	apiHTTPClient = &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusInternalServerError,
@@ -245,7 +252,11 @@ func TestSendAuthorizedRequestRejectsNonSuccessStatus(t *testing.T) {
 			Header:     make(http.Header),
 		}, nil
 	})}
-	defer func() { apiHTTPClient = oldClient }()
+	configurePocketBase("http://pocketbase.test", "admin", "secret", apiHTTPClient)
+	defer func() {
+		apiHTTPClient = oldClient
+		pocketBaseClient = oldPocketBaseClient
+	}()
 
 	_, err := sendAuthorizedRequest(http.MethodGet, "http://pocketbase.test/fail", nil)
 	if err == nil || !strings.Contains(err.Error(), "код 500") {
@@ -296,11 +307,13 @@ func TestUploadOutputMediaDoesNotCompleteTask(t *testing.T) {
 
 	oldURL := pocketBaseUrl
 	oldClient := mediaHTTPClient
-	pocketBaseUrl = "http://pocketbase.test"
+	oldPocketBaseClient := pocketBaseClient
+	configurePocketBase("http://pocketbase.test", "admin", "secret", apiHTTPClient)
 	mediaHTTPClient = &http.Client{Transport: transport, Timeout: time.Second}
 	defer func() {
 		pocketBaseUrl = oldURL
 		mediaHTTPClient = oldClient
+		pocketBaseClient = oldPocketBaseClient
 	}()
 
 	tempFile, err := os.CreateTemp(t.TempDir(), "result-*.mp4")

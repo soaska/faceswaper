@@ -23,7 +23,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.5"
-          cache-dependency-path: ${{ matrix.component }}/go.sum
+          cache-dependency-path: |
+            ${{ matrix.component }}/go.sum
+            shared/go.mod
       - name: Test
         working-directory: ${{ matrix.component }}
         run: go test -race ./...
@@ -53,11 +55,11 @@ jobs:
       matrix:
         include:
           - image: telegram-bot
-            context: ./telegram-bot
+            context: .
             file: ./telegram-bot/Dockerfile
             tag: latest
           - image: job-manager
-            context: ./job-manager
+            context: .
             file: ./job-manager/Dockerfile
             tag: latest
           - image: pocketbase
