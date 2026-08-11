@@ -66,9 +66,18 @@ func sendAuthorizedRequest(method, url string, payload []byte) ([]byte, error) {
 	}
 
 	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("PocketBase вернул код %d: %s", statusCode, limitedBody(body))
+		return nil, &pocketBaseStatusError{StatusCode: statusCode, Body: limitedBody(body)}
 	}
 	return body, nil
+}
+
+type pocketBaseStatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (err *pocketBaseStatusError) Error() string {
+	return fmt.Sprintf("PocketBase вернул код %d: %s", err.StatusCode, err.Body)
 }
 
 func doAuthorizedRequest(method, url string, payload []byte) ([]byte, int, error) {

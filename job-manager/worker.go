@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -16,6 +17,7 @@ const heartbeatFailureLimit = 3
 
 var heartbeatInterval = time.Minute
 var heartbeatJobFunc = heartbeatJob
+var settlementRetryBaseDelay = 250 * time.Millisecond
 
 var workerID string
 
@@ -23,19 +25,23 @@ type claimResponse struct {
 	Task *Task `json:"task"`
 }
 
-type userOperation struct {
-	UserID       string `json:"user_id"`
-	JobID        string `json:"job_id"`
-	Kind         string `json:"kind"`
-	OperationKey string `json:"operation_key"`
-	CoinsDelta   int    `json:"coins_delta,omitempty"`
-	CircleDelta  int    `json:"circle_delta,omitempty"`
-	FaceDelta    int    `json:"face_delta,omitempty"`
+type settlementRequest struct {
+	Collection string `json:"collection"`
+	TaskID     string `json:"task_id"`
+	WorkerID   string `json:"worker_id"`
+	Action     string `json:"action"`
+	Error      string `json:"error,omitempty"`
+	Price      int    `json:"price,omitempty"`
+	Duration   int    `json:"duration,omitempty"`
+	Threads    int    `json:"threads,omitempty"`
 }
 
-type userOperationResult struct {
-	Applied bool `json:"applied"`
-	Balance int  `json:"balance"`
+type settlementResult struct {
+	OK       bool `json:"ok"`
+	Already  bool `json:"already"`
+	Refunded bool `json:"refunded"`
+	Price    int  `json:"price"`
+	Balance  int  `json:"balance"`
 }
 
 func initializeWorkerID() string {
@@ -92,15 +98,6 @@ func heartbeatJob(collection, taskID string) error {
 	})
 }
 
-func updateClaimedStatus(collection, taskID, status string) error {
-	return sendJobCommand("/api/faceswaper/jobs/status", map[string]string{
-		"collection": collection,
-		"task_id":    taskID,
-		"worker_id":  workerID,
-		"status":     status,
-	})
-}
-
 func sendJobCommand(path string, data map[string]string) error {
 	payload, err := json.Marshal(data)
 	if err != nil {
@@ -112,43 +109,43 @@ func sendJobCommand(path string, data map[string]string) error {
 	return nil
 }
 
-func applyUserOperation(operation userOperation) (userOperationResult, error) {
-	payload, err := json.Marshal(operation)
+func settleJob(request settlementRequest) (settlementResult, error) {
+	request.WorkerID = workerID
+	payload, err := json.Marshal(request)
 	if err != nil {
-		return userOperationResult{}, fmt.Errorf("ошибка сериализации операции пользователя: %v", err)
+		return settlementResult{}, fmt.Errorf("ошибка сериализации расчёта задачи: %v", err)
 	}
 
 	var body []byte
 	for attempt := 1; attempt <= 3; attempt++ {
 		body, err = sendAuthorizedRequest(
 			"POST",
-			pocketBaseUrl+"/api/faceswaper/users/apply-operation",
+			pocketBaseUrl+"/api/faceswaper/jobs/settle",
 			payload,
 		)
 		if err == nil {
 			break
 		}
+		var statusErr *pocketBaseStatusError
+		if errors.As(err, &statusErr) && statusErr.StatusCode >= 400 && statusErr.StatusCode < 500 {
+			break
+		}
 		if attempt < 3 {
-			time.Sleep(time.Duration(attempt) * 250 * time.Millisecond)
+			time.Sleep(time.Duration(attempt) * settlementRetryBaseDelay)
 		}
 	}
 	if err != nil {
-		return userOperationResult{}, fmt.Errorf("операция не выполнена после трёх попыток: %v", err)
+		return settlementResult{}, fmt.Errorf("расчёт задачи не выполнен после трёх попыток: %w", err)
 	}
 
-	var result userOperationResult
+	var result settlementResult
 	if err := json.Unmarshal(body, &result); err != nil {
-		return userOperationResult{}, fmt.Errorf("ошибка разбора операции пользователя: %v", err)
+		return settlementResult{}, fmt.Errorf("ошибка разбора расчёта задачи: %v", err)
+	}
+	if !result.OK {
+		return settlementResult{}, fmt.Errorf("PocketBase не подтвердил расчёт задачи")
 	}
 	return result, nil
-}
-
-func billingOperationKey(task *Task, scope, action string) string {
-	return fmt.Sprintf("%s:%s:%s", scope, task.ID, action)
-}
-
-func completionOperationKey(task *Task, scope string) string {
-	return scope + ":" + task.ID + ":complete"
 }
 
 type leaseUncertainError struct {
@@ -208,11 +205,15 @@ func runWithHeartbeat(
 }
 
 func taskErrorStatus(err error) string {
+	return statusError + ": " + taskErrorMessage(err)
+}
+
+func taskErrorMessage(err error) string {
 	message := strings.TrimSpace(err.Error())
 	const maxErrorLength = 450
 	runes := []rune(message)
 	if len(runes) > maxErrorLength {
 		message = string(runes[:maxErrorLength]) + "…"
 	}
-	return statusError + ": " + message
+	return message
 }

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"mime"
@@ -97,22 +99,104 @@ func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error)
 	return fn(request)
 }
 
-func TestOperationKeysAreJobScoped(t *testing.T) {
-	task := &Task{ID: "job123", Attempts: 2}
-	if got, want := billingOperationKey(task, "face", "charge"), "face:job123:charge"; got != want {
-		t.Fatalf("billingOperationKey() = %q, want %q", got, want)
-	}
-	if got, want := completionOperationKey(task, "face"), "face:job123:complete"; got != want {
-		t.Fatalf("completionOperationKey() = %q, want %q", got, want)
-	}
-}
-
 func TestSanitizeWorkerID(t *testing.T) {
 	if got, want := sanitizeWorkerID(" gpu worker/01 "), "gpu-worker-01"; got != want {
 		t.Fatalf("sanitizeWorkerID() = %q, want %q", got, want)
 	}
 	if got := sanitizeWorkerID(strings.Repeat("a", 101)); len(got) != 100 {
 		t.Fatalf("worker ID length = %d, want 100", len(got))
+	}
+}
+
+func TestSettleJobRetriesIdenticalIdempotentRequest(t *testing.T) {
+	oldClient := apiHTTPClient
+	oldURL := pocketBaseUrl
+	oldWorkerID := workerID
+	oldRetryDelay := settlementRetryBaseDelay
+	defer func() {
+		apiHTTPClient = oldClient
+		pocketBaseUrl = oldURL
+		workerID = oldWorkerID
+		settlementRetryBaseDelay = oldRetryDelay
+	}()
+
+	pocketBaseUrl = "http://pocketbase.test"
+	workerID = "worker-1"
+	settlementRetryBaseDelay = 0
+	var bodies [][]byte
+	apiHTTPClient = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bodies = append(bodies, body)
+		status := http.StatusInternalServerError
+		response := `{"message":"temporary"}`
+		if len(bodies) == 2 {
+			status = http.StatusOK
+			response = `{"ok":true,"already":true,"price":3,"balance":197}`
+		}
+		return &http.Response{
+			StatusCode: status,
+			Body:       io.NopCloser(strings.NewReader(response)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	result, err := settleJob(settlementRequest{
+		Collection: "face_jobs",
+		TaskID:     "job123",
+		Action:     "start_sending",
+		Price:      3,
+		Duration:   12,
+		Threads:    1,
+	})
+	if err != nil {
+		t.Fatalf("settleJob() error = %v", err)
+	}
+	if len(bodies) != 2 || !bytes.Equal(bodies[0], bodies[1]) {
+		t.Fatalf("settlement retry bodies = %q, want two identical requests", bodies)
+	}
+	var request settlementRequest
+	if err := json.Unmarshal(bodies[0], &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.WorkerID != "worker-1" || request.TaskID != "job123" {
+		t.Fatalf("settlement request = %+v", request)
+	}
+	if !result.OK || !result.Already || result.Price != 3 || result.Balance != 197 {
+		t.Fatalf("settleJob() = %+v", result)
+	}
+}
+
+func TestSettleJobDoesNotRetryRejectedRequest(t *testing.T) {
+	oldClient := apiHTTPClient
+	oldURL := pocketBaseUrl
+	oldWorkerID := workerID
+	defer func() {
+		apiHTTPClient = oldClient
+		pocketBaseUrl = oldURL
+		workerID = oldWorkerID
+	}()
+
+	pocketBaseUrl = "http://pocketbase.test"
+	workerID = "worker-1"
+	var calls int
+	apiHTTPClient = &http.Client{Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Body:       io.NopCloser(strings.NewReader(`{"message":"insufficient balance"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	_, err := settleJob(settlementRequest{Collection: "circle_jobs", TaskID: "job123", Action: "start_sending", Price: 1})
+	if err == nil || !isRejectedSettlement(err) {
+		t.Fatalf("settleJob() error = %v, want rejected settlement", err)
+	}
+	if calls != 1 {
+		t.Fatalf("settlement calls = %d, want 1", calls)
 	}
 }
 

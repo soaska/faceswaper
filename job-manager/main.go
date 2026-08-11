@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -80,38 +81,32 @@ func handleCircleTaskWithLease(ctx context.Context, task *Task) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		failTask("circle_jobs", task, err)
-		return nil
+		return failTaskAtomically("circle_jobs", task, err)
 	}
 
 	if err := processCircleTask(ctx, task); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		failTask("circle_jobs", task, err)
-		return nil
+		return failTaskAtomically("circle_jobs", task, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := chargeTaskCoins(task, "circle", "circle_charge", circlePrice); err != nil {
+	settlement, err := settleJob(settlementRequest{
+		Collection: "circle_jobs",
+		TaskID:     task.ID,
+		Action:     "start_sending",
+		Price:      circlePrice,
+	})
+	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		failTask("circle_jobs", task, err)
-		return nil
-	}
-
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := updateClaimedStatus("circle_jobs", task.ID, statusSending); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if isRejectedSettlement(err) {
+			return failTaskAtomically("circle_jobs", task, err)
 		}
-		refundTaskCoins(task, "circle", "circle_refund", circlePrice)
-		failTask("circle_jobs", task, err)
-		return nil
+		return fmt.Errorf("не удалось подтвердить списание и отправку задачи: %w", err)
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -121,36 +116,24 @@ func handleCircleTaskWithLease(ctx context.Context, task *Task) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		refundTaskCoins(task, "circle", "circle_refund", circlePrice)
-		failTask("circle_jobs", task, err)
-		return nil
+		return failTaskAtomically("circle_jobs", task, err)
 	}
 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, err := applyUserOperation(userOperation{
-		UserID:       task.Owner,
-		JobID:        task.ID,
-		Kind:         "circle_complete",
-		OperationKey: completionOperationKey(task, "circle"),
-		CircleDelta:  1,
+	if _, err := settleJob(settlementRequest{
+		Collection: "circle_jobs",
+		TaskID:     task.ID,
+		Action:     "complete",
 	}); err != nil {
-		log.Printf("Кружок по задаче %s отправлен, но circle_count не обновлён: %v", task.ID, err)
-	}
-
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := updateClaimedStatus("circle_jobs", task.ID, statusCompleted); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		log.Printf("Кружок по задаче %s отправлен, но статус completed не сохранён: %v", task.ID, err)
-		return nil
+		return fmt.Errorf("кружок отправлен, но атомарное завершение задачи не подтверждено: %w", err)
 	}
 
-	log.Printf("Задача создания кружка %s успешно обработана", task.ID)
+	log.Printf("Задача создания кружка %s успешно обработана, списано %d монет", task.ID, settlement.Price)
 	return nil
 }
 
@@ -177,8 +160,7 @@ func handleFaceSwapTaskWithLease(ctx context.Context, task *Task) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		failTask("face_jobs", task, err)
-		return nil
+		return failTaskAtomically("face_jobs", task, err)
 	}
 
 	var duration int
@@ -188,38 +170,29 @@ func handleFaceSwapTaskWithLease(ctx context.Context, task *Task) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		failTask("face_jobs", task, processErr)
-		return nil
+		return failTaskAtomically("face_jobs", task, processErr)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	totalPrice := calculateFaceSwapPrice(isPhoto, duration, workers)
-	if err := updateTaskDurationPriceAndThreads(task.ID, duration, totalPrice, workers); err != nil {
-		log.Printf("Не удалось сохранить цену задачи %s: %v", task.ID, err)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := chargeTaskCoins(task, "face", "face_charge", totalPrice); err != nil {
+	settlement, err := settleJob(settlementRequest{
+		Collection: "face_jobs",
+		TaskID:     task.ID,
+		Action:     "start_sending",
+		Price:      totalPrice,
+		Duration:   duration,
+		Threads:    workers,
+	})
+	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		failTask("face_jobs", task, err)
-		return nil
-	}
-
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := updateClaimedStatus("face_jobs", task.ID, statusSending); err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if isRejectedSettlement(err) {
+			return failTaskAtomically("face_jobs", task, err)
 		}
-		refundTaskCoins(task, "face", "face_refund", totalPrice)
-		failTask("face_jobs", task, err)
-		return nil
+		return fmt.Errorf("не удалось подтвердить списание и отправку задачи: %w", err)
 	}
 
 	outputExtension := ".mp4"
@@ -240,33 +213,21 @@ func handleFaceSwapTaskWithLease(ctx context.Context, task *Task) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		refundTaskCoins(task, "face", "face_refund", totalPrice)
-		failTask("face_jobs", task, sendErr)
-		return nil
+		return failTaskAtomically("face_jobs", task, sendErr)
 	}
 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, err := applyUserOperation(userOperation{
-		UserID:       task.Owner,
-		JobID:        task.ID,
-		Kind:         "face_complete",
-		OperationKey: completionOperationKey(task, "face"),
-		FaceDelta:    1,
+	if _, err := settleJob(settlementRequest{
+		Collection: "face_jobs",
+		TaskID:     task.ID,
+		Action:     "complete",
 	}); err != nil {
-		log.Printf("Результат задачи %s отправлен, но face_replace_count не обновлён: %v", task.ID, err)
-	}
-
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := updateClaimedStatus("face_jobs", task.ID, statusCompleted); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		log.Printf("Результат задачи %s отправлен, но статус completed не сохранён: %v", task.ID, err)
-		return nil
+		return fmt.Errorf("результат отправлен, но атомарное завершение задачи не подтверждено: %w", err)
 	}
 
 	log.Printf(
@@ -274,7 +235,7 @@ func handleFaceSwapTaskWithLease(ctx context.Context, task *Task) error {
 		task.ID,
 		duration,
 		workers,
-		totalPrice,
+		settlement.Price,
 	)
 	return nil
 }
@@ -299,44 +260,25 @@ func ensureTaskBalance(task *Task, minimum int) error {
 	return nil
 }
 
-func chargeTaskCoins(task *Task, scope, kind string, amount int) error {
-	_, err := applyUserOperation(userOperation{
-		UserID:       task.Owner,
-		JobID:        task.ID,
-		Kind:         kind,
-		OperationKey: billingOperationKey(task, scope, "charge"),
-		CoinsDelta:   -amount,
-	})
-	if err != nil {
-		return fmt.Errorf("операция с балансом не выполнена: %v", err)
-	}
-	return nil
-}
-
-func refundTaskCoins(task *Task, scope, kind string, amount int) {
-	if amount <= 0 {
-		return
-	}
-	_, err := applyUserOperation(userOperation{
-		UserID:       task.Owner,
-		JobID:        task.ID,
-		Kind:         kind,
-		OperationKey: billingOperationKey(task, scope, "refund"),
-		CoinsDelta:   amount,
-	})
-	if err != nil {
-		log.Printf("Не удалось вернуть %d монет по задаче %s: %v", amount, task.ID, err)
-	}
-}
-
-func failTask(collection string, task *Task, cause error) {
+func failTaskAtomically(collection string, task *Task, cause error) error {
 	log.Printf("Задача %s завершилась ошибкой: %v", task.ID, cause)
-	if err := updateClaimedStatus(collection, task.ID, taskErrorStatus(cause)); err != nil {
-		log.Printf("Не удалось сохранить ошибку задачи %s: %v", task.ID, err)
+	if _, err := settleJob(settlementRequest{
+		Collection: collection,
+		TaskID:     task.ID,
+		Action:     "fail",
+		Error:      taskErrorMessage(cause),
+	}); err != nil {
+		return fmt.Errorf("не удалось атомарно завершить задачу %s с ошибкой: %w", task.ID, err)
 	}
 	if err := sendErrorNotification(task.Owner, task.ID); err != nil {
 		log.Printf("Не удалось уведомить пользователя об ошибке задачи %s: %v", task.ID, err)
 	}
+	return nil
+}
+
+func isRejectedSettlement(err error) bool {
+	var statusErr *pocketBaseStatusError
+	return errors.As(err, &statusErr) && statusErr.StatusCode == 400
 }
 
 func waitForNextAttempt(ctx context.Context, delay time.Duration) bool {
