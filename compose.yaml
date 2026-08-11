@@ -18,6 +18,9 @@ services:
       dockerfile: Dockerfile
     volumes:
       - ./data/pocketbase:/pb/pb_data
+    environment:
+      PB_ADMIN_EMAIL: ${POCKETBASE_LOGIN}
+      PB_ADMIN_PASSWORD: ${POCKETBASE_PASSWORD}
     ports:
       - "127.0.0.1:${POCKETBASE_PORT:-8080}:8080"
     restart: always

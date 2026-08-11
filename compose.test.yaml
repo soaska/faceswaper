@@ -1,0 +1,7 @@
+services:
+  telegram-bot:
+    # A second getUpdates consumer with the production token would race the
+    # production bot. Enable this profile only with an isolated test token or
+    # during an explicitly coordinated production polling cutover.
+    profiles:
+      - telegram-e2e
