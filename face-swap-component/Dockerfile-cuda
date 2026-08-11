@@ -1,6 +1,6 @@
-FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04@sha256:17e2934e1fa96152b14f78078bfbafd0f00f391df995dc6c641a720fce1202bb
 
-RUN apt-get update && apt-get install -y --allow-change-held-packages \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
     python3-pip \
     ffmpeg \
@@ -12,11 +12,6 @@ RUN apt-get update && apt-get install -y --allow-change-held-packages \
     libglib2.0-0 \
     wget \
     build-essential \
-    cuda-nvrtc-11-8 \
-    cuda-cudart-11-8 \
-    cuda-libraries-11-8 \
-    cuda-libraries-dev-11-8 \
-    libcudnn8 \
     libmagic1 \
     && rm -rf /var/lib/apt/lists/*
 
