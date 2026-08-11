@@ -134,52 +134,6 @@ routerAdd(
   $apis.requireAdminAuth(),
 );
 
-function faceswaperFindOperation(txDao, operationKey) {
-  const records = txDao.findRecordsByFilter(
-    "user_operations",
-    "operation_key = '" + operationKey + "'",
-    "",
-    1,
-    0,
-  );
-  return records.length > 0 ? records[0] : null;
-}
-
-function faceswaperApplyOperation(txDao, data) {
-  const existing = faceswaperFindOperation(txDao, data.operationKey);
-  if (existing) {
-    return existing;
-  }
-
-  const user = txDao.findRecordById("users", data.userId);
-  const balance = user.getInt("coins") + data.coinsDelta;
-  if (balance < 0) {
-    throw new BadRequestError(
-      "Недостаточно монет. Требуется: " +
-        -data.coinsDelta +
-        ", доступно: " +
-        user.getInt("coins"),
-    );
-  }
-
-  user.set("coins", balance);
-  user.set("circle_count", user.getInt("circle_count") + data.circleDelta);
-  user.set("face_replace_count", user.getInt("face_replace_count") + data.faceDelta);
-  txDao.saveRecord(user);
-
-  const operation = new Record(txDao.findCollectionByNameOrId("user_operations"));
-  operation.set("operation_key", data.operationKey);
-  operation.set("user", data.userId);
-  operation.set("job_id", data.jobId);
-  operation.set("kind", data.kind);
-  operation.set("coins_delta", data.coinsDelta);
-  operation.set("circle_delta", data.circleDelta);
-  operation.set("face_delta", data.faceDelta);
-  operation.set("balance_after", balance);
-  txDao.saveRecord(operation);
-  return operation;
-}
-
 // Couples each user balance/counter change to its job state transition in one
 // transaction. Every action is idempotent so a lost HTTP response is safe to
 // retry with the same job ID.
@@ -220,6 +174,54 @@ routerAdd(
       throw new BadRequestError("Цена и параметры задачи должны быть неотрицательными целыми числами.");
     }
 
+    // PocketBase 0.22 evaluates route callbacks in an isolated JS context, so
+    // callback helpers must be declared inside the callback itself.
+    function findOperation(txDao, operationKey) {
+      const records = txDao.findRecordsByFilter(
+        "user_operations",
+        "operation_key = '" + operationKey + "'",
+        "",
+        1,
+        0,
+      );
+      return records.length > 0 ? records[0] : null;
+    }
+
+    function applyOperation(txDao, data) {
+      const existing = findOperation(txDao, data.operationKey);
+      if (existing) {
+        return existing;
+      }
+
+      const user = txDao.findRecordById("users", data.userId);
+      const balance = user.getInt("coins") + data.coinsDelta;
+      if (balance < 0) {
+        throw new BadRequestError(
+          "Недостаточно монет. Требуется: " +
+            -data.coinsDelta +
+            ", доступно: " +
+            user.getInt("coins"),
+        );
+      }
+
+      user.set("coins", balance);
+      user.set("circle_count", user.getInt("circle_count") + data.circleDelta);
+      user.set("face_replace_count", user.getInt("face_replace_count") + data.faceDelta);
+      txDao.saveRecord(user);
+
+      const operation = new Record(txDao.findCollectionByNameOrId("user_operations"));
+      operation.set("operation_key", data.operationKey);
+      operation.set("user", data.userId);
+      operation.set("job_id", data.jobId);
+      operation.set("kind", data.kind);
+      operation.set("coins_delta", data.coinsDelta);
+      operation.set("circle_delta", data.circleDelta);
+      operation.set("face_delta", data.faceDelta);
+      operation.set("balance_after", balance);
+      txDao.saveRecord(operation);
+      return operation;
+    }
+
     let result = null;
     $app.dao().runInTransaction((txDao) => {
       const record = txDao.findRecordById(collection, taskId);
@@ -235,7 +237,7 @@ routerAdd(
           if (record.getString("claimed_by") !== workerId) {
             throw new ForbiddenError("Задача принадлежит другому воркеру.");
           }
-          const existingCharge = faceswaperFindOperation(txDao, chargeKey);
+          const existingCharge = findOperation(txDao, chargeKey);
           if (!existingCharge) {
             throw new BadRequestError("Для sending-задачи не найдено списание.");
           }
@@ -253,9 +255,9 @@ routerAdd(
         if (requestedPrice < 1) {
           throw new BadRequestError("Цена задачи должна быть положительной.");
         }
-        let charge = faceswaperFindOperation(txDao, chargeKey);
+        let charge = findOperation(txDao, chargeKey);
         if (!charge) {
-          charge = faceswaperApplyOperation(txDao, {
+          charge = applyOperation(txDao, {
             operationKey: chargeKey,
             userId: owner,
             jobId: taskId,
@@ -290,7 +292,7 @@ routerAdd(
         if (currentStatus !== "sending" || record.getString("claimed_by") !== workerId) {
           throw new ForbiddenError("Задача не принадлежит активному воркеру.");
         }
-        faceswaperApplyOperation(txDao, {
+        applyOperation(txDao, {
           operationKey: completeKey,
           userId: owner,
           jobId: taskId,
@@ -317,9 +319,9 @@ routerAdd(
       ) {
         throw new ForbiddenError("Задача не принадлежит активному воркеру.");
       }
-      const charge = faceswaperFindOperation(txDao, chargeKey);
-      if (charge && !faceswaperFindOperation(txDao, refundKey)) {
-        faceswaperApplyOperation(txDao, {
+      const charge = findOperation(txDao, chargeKey);
+      if (charge && !findOperation(txDao, refundKey)) {
+        applyOperation(txDao, {
           operationKey: refundKey,
           userId: owner,
           jobId: taskId,
