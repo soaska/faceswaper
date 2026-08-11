@@ -7,7 +7,9 @@ import cv2
 import insightface
 import onnxruntime
 from insightface.app import FaceAnalysis
+from insightface.model_zoo import model_zoo
 
+from ort_sessions import configured_insightface_sessions, create_session_options
 from pipeline import VideoProcessor
 
 logger = logging.getLogger(__name__)
@@ -31,17 +33,19 @@ def create_processor(
         providers = ["CPUExecutionProvider"]
         context_id = -1
 
-    analyzer = FaceAnalysis(
-        name="buffalo_l",
-        allowed_modules=["detection"],
-        providers=providers,
-        root=str(cache_directory),
-    )
-    analyzer.prepare(ctx_id=context_id, det_size=(640, 640))
-    swapper = insightface.model_zoo.get_model(
-        str(model_path),
-        providers=providers,
-    )
+    session_options = create_session_options(onnxruntime)
+    with configured_insightface_sessions(model_zoo, session_options):
+        analyzer = FaceAnalysis(
+            name="buffalo_l",
+            allowed_modules=["detection"],
+            providers=providers,
+            root=str(cache_directory),
+        )
+        analyzer.prepare(ctx_id=context_id, det_size=(640, 640))
+        swapper = insightface.model_zoo.get_model(
+            str(model_path),
+            providers=providers,
+        )
     logger.info("Модели загружены, providers=%s", providers)
     return VideoProcessor(
         cv2,
